@@ -35,7 +35,6 @@ fetch "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSI
 # libguestfs reads the host kernel from /boot (root-only on Ubuntu), hence sudo.
 export LIBGUESTFS_BACKEND=direct
 export LIBGUESTFS_MEMSIZE=2048   # helper VM RAM; the runner container's limit is 4Gi
-export TMPDIR=$WORK              # virt-sparsify's scratch overlay, on the pod's work volume
 G="sudo -E"
 
 # 0. Fail fast if the libguestfs helper VM gets no network. Under TCG everything is slow,
@@ -97,7 +96,11 @@ $G virt-customize -a "$WORK/build.qcow2" --network --smp 2 \
 # What went in, for the image labels and the job summary.
 $G virt-cat -a "$WORK/build.qcow2" /etc/homelab-runner-vm/versions.txt | tee "$OUT/versions.txt"
 
-# 3. Drop unused blocks and compress: roughly 1-1.3 GB instead of several GB.
-$G virt-sparsify --compress "$WORK/build.qcow2" "$OUT/disk.qcow2"
+# 3. Drop unused blocks, then compress: roughly 1-1.3 GB instead of several GB.
+#    --in-place only fstrims inside the image. virt-sparsify's copy mode would need a
+#    scratch overlay as large as the virtual disk (20G) and, when it thinks space is short,
+#    stops at an interactive "Press RETURN" prompt that fails in CI (End_of_file).
+$G virt-sparsify --in-place "$WORK/build.qcow2"
+$G qemu-img convert -c -O qcow2 "$WORK/build.qcow2" "$OUT/disk.qcow2"
 $G chown "$(id -u):$(id -g)" "$OUT/disk.qcow2"
 qemu-img info "$OUT/disk.qcow2"

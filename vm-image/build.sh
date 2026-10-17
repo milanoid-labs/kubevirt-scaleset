@@ -3,7 +3,7 @@
 # Docker CE and gh, written to out/disk.qcow2 (sparse, compressed).
 #
 # Runs on homelab-runners (Ubuntu 24.04 runner container, passwordless sudo) and needs
-# guestfs-tools, linux-image-virtual and qemu-utils. There is no /dev/kvm in the pods, so
+# guestfs-tools, linux-image-virtual, qemu-utils and isc-dhcp-client (see the workflow). There is no /dev/kvm in the pods, so
 # libguestfs runs its helper VM in software emulation (TCG): slow, but no special access.
 # The same script works on any Ubuntu machine with those packages (faster with KVM).
 set -euo pipefail

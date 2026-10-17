@@ -38,11 +38,15 @@ jobs:
 
       # In the runner container itself (4Gi limit), not via dind (1Gi): libguestfs' helper
       # VM alone takes 2Gi. linux-image-virtual is the kernel libguestfs boots.
+      # isc-dhcp-client: supermin builds the helper VM only from the packages listed in
+      # libguestfs' supermin.d/packages, which names isc-dhcp-client. apt satisfies the
+      # "dhcpcd-base | isc-dhcp-client" dependency with dhcpcd-base, which isn't on that
+      # list, so without this the helper VM has no DHCP client: no IP, no DNS, no apt.
       - name: install build tools
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            guestfs-tools linux-image-virtual qemu-utils
+            guestfs-tools linux-image-virtual qemu-utils isc-dhcp-client
 
       - name: build disk
         run: vm-image/build.sh

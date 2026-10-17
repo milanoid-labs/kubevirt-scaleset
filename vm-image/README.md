@@ -62,7 +62,7 @@ DNS, the build stops there and the `build disk` log shows what the helper VM saw
 Locally, on Ubuntu 24.04:
 
 ```sh
-sudo apt-get install guestfs-tools linux-image-virtual qemu-utils
+sudo apt-get install guestfs-tools linux-image-virtual qemu-utils isc-dhcp-client
 vm-image/build.sh          # -> vm-image/out/disk.qcow2, out/versions.txt
 ```
 

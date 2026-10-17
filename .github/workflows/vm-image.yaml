@@ -1,0 +1,93 @@
+name: VM image
+
+# Builds the runner VM disk (vm-image/) and publishes it as a KubeVirt containerDisk to the
+# homelab Nexus. PRs build only (no secrets, nothing pushed); main builds and pushes.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'vm-image/**'
+      - '.github/workflows/vm-image.yaml'
+  push:
+    branches: [main]
+    paths:
+      - 'vm-image/**'
+      - '.github/workflows/vm-image.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vm-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CRANE_VERSION: "0.22.1"
+  CRANE_SHA256: 0ab7a1d6932a213aed964ce97666c3077fe691c8606413674a8b3e0b9ec4cda0
+
+jobs:
+  build:
+    # On the LAN: the only runners that reach Nexus (192.168.1.204:8081). No /dev/kvm in the
+    # pods, so libguestfs emulates (TCG); the build is slow but needs no special access.
+    runs-on: homelab-runners
+    timeout-minutes: 150
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # In the runner container itself (4Gi limit), not via dind (1Gi): libguestfs' helper
+      # VM alone takes 2Gi. linux-image-virtual is the kernel libguestfs boots.
+      - name: install build tools
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            guestfs-tools linux-image-virtual qemu-utils
+
+      - name: build disk
+        run: vm-image/build.sh
+
+      # dind is fine here: it only packs an existing file into an image.
+      - name: build containerDisk
+        run: |
+          cp vm-image/out/disk.qcow2 vm-image/containerdisk/
+          docker build --platform linux/amd64 \
+            --label org.opencontainers.image.source="${{ github.server_url }}/${{ github.repository }}" \
+            --label org.opencontainers.image.revision="${{ github.sha }}" \
+            --label io.homelab.runner-vm.versions="$(paste -sd ';' vm-image/out/versions.txt)" \
+            -t homelab-runner-vm:ci vm-image/containerdisk
+          docker save homelab-runner-vm:ci -o vm-image/out/image.tar
+          ls -lh vm-image/out/
+
+      # crane, not docker push: the dind daemon only does HTTPS, and Nexus is plain HTTP.
+      # --insecure is per command, so no daemon config has to change.
+      - name: install crane
+        if: github.event_name != 'pull_request'
+        run: |
+          curl -fsSL -o /tmp/crane.tgz \
+            "https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz"
+          echo "${CRANE_SHA256}  /tmp/crane.tgz" | sha256sum -c --quiet
+          sudo tar -xzf /tmp/crane.tgz -C /usr/local/bin crane
+
+      - name: push to Nexus
+        if: github.event_name != 'pull_request'
+        env:
+          REGISTRY: ${{ vars.NEXUS_REGISTRY }}
+          USERNAME: ${{ vars.NEXUS_PUSH_USERNAME }}
+          PASSWORD: ${{ secrets.NEXUS_PUSH_PASSWORD }}
+        run: |
+          # docker-hosted is ALLOW_ONCE, so every build needs a new tag: date + commit.
+          image="${REGISTRY}/docker-hosted/homelab-runner-vm"
+          tag="$(date -u +%Y%m%d)-${GITHUB_SHA::7}"
+          echo "$PASSWORD" | crane auth login "$REGISTRY" -u "$USERNAME" --password-stdin
+          crane push --insecure vm-image/out/image.tar "${image}:${tag}"
+          digest=$(crane digest --insecure "${image}:${tag}")
+          {
+            echo "### Runner VM image"
+            echo '```'
+            echo "${image}:${tag}@${digest}"
+            echo '```'
+            echo '```'
+            cat vm-image/out/versions.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,25 @@
+# Ephemeral GitHub Actions runner: runs exactly one job, then powers the VM off.
+#
+# Deliberately NOT enabled in the image. The scaler's cloud-init user-data writes the JIT
+# config to /etc/actions-runner/jitconfig and then starts this unit (runcmd). That way it
+# can't race cloud-init, and a VM booted without user-data just idles until the scaler's
+# boot timeout reaps it. See ../README.md, "Boot contract".
+[Unit]
+Description=GitHub Actions ephemeral runner (one JIT job, then power off)
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+ConditionPathExists=/etc/actions-runner/jitconfig
+
+[Service]
+Type=simple
+User=runner
+Group=runner
+WorkingDirectory=/opt/actions-runner
+# The JIT config file is root:root 0600. LoadCredential hands a copy to this service only
+# ($CREDENTIALS_DIRECTORY, readable by User=), without making the file itself readable.
+LoadCredential=jitconfig:/etc/actions-runner/jitconfig
+ExecStart=/bin/bash -c 'exec ./run.sh --jitconfig "$(cat "$CREDENTIALS_DIRECTORY/jitconfig")"'
+# "+" runs this as root. Whatever way the runner ends (job done, crash, error), the VM
+# stops, its VMI turns Succeeded and the scaler deletes it.
+ExecStopPost=+/usr/bin/systemctl poweroff --no-block
+Restart=no

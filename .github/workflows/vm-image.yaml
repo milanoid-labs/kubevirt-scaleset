@@ -76,9 +76,10 @@ jobs:
           USERNAME: ${{ vars.NEXUS_PUSH_USERNAME }}
           PASSWORD: ${{ secrets.NEXUS_PUSH_PASSWORD }}
         run: |
-          # docker-hosted is ALLOW_ONCE, so every build needs a new tag: date + commit.
+          # docker-hosted is ALLOW_ONCE, so every build needs a new tag. Date + commit alone
+          # collides on a re-run or a second dispatch the same day, so add run number + attempt.
           image="${REGISTRY}/docker-hosted/homelab-runner-vm"
-          tag="$(date -u +%Y%m%d)-${GITHUB_SHA::7}"
+          tag="$(date -u +%Y%m%d)-${GITHUB_SHA::7}-${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
           echo "$PASSWORD" | crane auth login "$REGISTRY" -u "$USERNAME" --password-stdin
           crane push --insecure vm-image/out/image.tar "${image}:${tag}"
           digest=$(crane digest --insecure "${image}:${tag}")

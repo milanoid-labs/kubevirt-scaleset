@@ -4,7 +4,7 @@ An Ubuntu 24.04 disk with the GitHub Actions runner, Docker CE and `gh`, publish
 KubeVirt **containerDisk**:
 
 ```
-192.168.1.204:8081/docker-hosted/homelab-runner-vm:<YYYYMMDD>-<commit>
+192.168.1.204:8081/docker-hosted/homelab-runner-vm:<YYYYMMDD>-<commit>-<run number>.<attempt>
 ```
 
 Every runner VM boots this image read-only (KubeVirt adds a throwaway copy-on-write
@@ -17,7 +17,7 @@ overlay), runs exactly one job and powers off. Nothing survives between jobs.
 | Ubuntu cloud image | dated build `UBUNTU_RELEASE` | `versions.env` (+ SHA-256) |
 | actions/runner | `RUNNER_VERSION` | `versions.env` (+ SHA-256) |
 | gh | `GH_VERSION` | `versions.env` (+ SHA-256) |
-| Docker CE, buildx, compose, containerd | latest from download.docker.com at build time | recorded in `/etc/homelab-runner-vm/versions.txt` and the image label `io.homelab.runner-vm.versions` |
+| Docker CE + CLI, buildx, compose, containerd | latest from download.docker.com at build time | recorded in `/etc/homelab-runner-vm/versions.txt` and the image label `io.homelab.runner-vm.versions` |
 | git, curl, jq, unzip, zip, dirmngr, qemu-guest-agent | Ubuntu archive at build time | same |
 
 Keep `RUNNER_VERSION` and `GH_VERSION` equal to homelab-cluster's `runner/Dockerfile`, so a
@@ -54,6 +54,10 @@ CI (`.github/workflows/vm-image.yaml`) runs on `homelab-runners`: PRs build only
 builds and pushes with the Nexus user `ci-push` (repo secret `NEXUS_PUSH_PASSWORD`,
 variables `NEXUS_PUSH_USERNAME`, `NEXUS_REGISTRY`). The pods have no `/dev/kvm`, so
 libguestfs emulates and a build takes a while.
+
+`build.sh` first probes the network of libguestfs' helper VM (~3 min). If it has no IP or
+DNS, the build stops there and the `build disk` log shows what the helper VM saw (DHCP,
+`resolv.conf`), instead of apt failing after the ~15 min resize.
 
 Locally, on Ubuntu 24.04:
 

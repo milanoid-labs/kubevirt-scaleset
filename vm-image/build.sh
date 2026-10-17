@@ -38,6 +38,23 @@ export LIBGUESTFS_MEMSIZE=2048   # helper VM RAM; the runner container's limit i
 export TMPDIR=$WORK              # virt-sparsify's scratch overlay, on the pod's work volume
 G="sudo -E"
 
+# 0. Fail fast if the libguestfs helper VM gets no network. Under TCG everything is slow,
+#    and a broken network otherwise only shows up after the ~15 min resize, as apt's
+#    "Temporary failure resolving". Probe on a throwaway overlay of the base image, and on
+#    failure print what the helper VM saw (DHCP, resolv.conf) from libguestfs' verbose log.
+rm -f "$WORK/probe.qcow2"
+qemu-img create -q -f qcow2 -b "$WORK/base.img" -F qcow2 "$WORK/probe.qcow2"
+if ! $G virt-customize -v -x -a "$WORK/probe.qcow2" --network \
+    --run-command 'ip -4 addr show; cat /etc/resolv.conf; getent hosts archive.ubuntu.com' \
+    >"$WORK/probe.log" 2>&1; then
+  echo "::error::libguestfs helper VM has no working network/DNS"
+  grep -aiE 'dhcp|resolv|nameserver|inet |getent|network|passt|slirp|timed? ?out' "$WORK/probe.log" | tail -60
+  exit 1
+fi
+echo "helper VM network OK:"
+grep -aE 'inet |nameserver|archive.ubuntu.com' "$WORK/probe.log" | grep -v '^libguestfs: trace' | tail -6
+rm -f "$WORK/probe.qcow2"
+
 # 1. Grow the image: the cloud image's root filesystem has <1 GB free, not enough for
 #    Docker + runner. virt-resize copies it into a DISK_SIZE disk and expands sda1 (root).
 rm -f "$WORK/build.qcow2"
@@ -70,7 +87,8 @@ $G virt-customize -a "$WORK/build.qcow2" --network --smp 2 \
   --copy-in files/actions-runner.service:/etc/systemd/system \
   --mkdir /etc/homelab-runner-vm \
   --run-command "{ echo ubuntu-cloud-image ${UBUNTU_RELEASE}; echo actions-runner ${RUNNER_VERSION}; echo gh ${GH_VERSION};
-    dpkg-query -W -f '\${Package} \${Version}\n' docker-ce containerd.io docker-buildx-plugin git qemu-guest-agent;
+    dpkg-query -W -f '\${Package} \${Version}\n' docker-ce docker-ce-cli containerd.io docker-buildx-plugin \
+      docker-compose-plugin git curl jq unzip zip dirmngr gnupg ca-certificates qemu-guest-agent;
     } > /etc/homelab-runner-vm/versions.txt" \
   --run-command 'apt-get clean && rm -rf /var/lib/apt/lists/*' \
   --run-command 'rm -f /etc/ssh/ssh_host_*' \

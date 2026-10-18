@@ -1,0 +1,7 @@
+# Only the Go sources (and CI's prebuilt binary) go into the image build.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/
+!out/scaler

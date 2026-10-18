@@ -1,0 +1,46 @@
+# One runner VM by hand, without the scaler: see test/vm/README.md.
+# The Secret vm-test-1-userdata (cloud-init user-data with a JIT config) is created imperatively,
+# never committed. Replace IMAGE with the image reference from the vm-image run summary.
+apiVersion: kubevirt.io/v1
+kind: VirtualMachineInstance
+metadata:
+  name: vm-test-1
+  namespace: vm-test
+spec:
+  # KubeVirt's workloads.nodePlacement only places virt-handler; each VMI needs its own.
+  nodeSelector:
+    homelab.milanoid.net/kubevirt-runners: "true"
+  tolerations:
+    - key: homelab.milanoid.net/kubevirt-runners
+      operator: Exists
+      effect: NoSchedule
+  evictionStrategy: None   # a job VM is never live-migrated; it just ends
+  terminationGracePeriodSeconds: 30
+  domain:
+    cpu:
+      cores: 2
+    memory:
+      guest: 4Gi
+    devices:
+      disks:
+        - name: root
+          disk:
+            bus: virtio
+        - name: cloudinit
+          disk:
+            bus: virtio
+      interfaces:
+        - name: default
+          masquerade: {}   # VM behind the pod's IP (NAT), like a pod's network
+      rng: {}              # entropy for TLS right after boot
+  networks:
+    - name: default
+      pod: {}
+  volumes:
+    - name: root
+      containerDisk:
+        image: IMAGE   # 192.168.1.204:8081/docker-hosted/homelab-runner-vm:<tag>@sha256:<digest>
+    - name: cloudinit
+      cloudInitNoCloud:
+        secretRef:
+          name: vm-test-1-userdata

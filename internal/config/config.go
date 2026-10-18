@@ -25,8 +25,6 @@ type Config struct {
 
 	MinRunners int
 	MaxRunners int
-
-	LogLevel string
 }
 
 // FromEnv reads the configuration and reports every problem at once.
@@ -38,7 +36,6 @@ func FromEnv() (Config, error) {
 		ScaleSetName:    env("SCALE_SET_NAME", "homelab-runners-vm"),
 		RunnerGroup:     env("RUNNER_GROUP", "default"),
 		AppClientID:     os.Getenv("GITHUB_APP_CLIENT_ID"),
-		LogLevel:        env("LOG_LEVEL", "info"),
 	}
 	if c.AppClientID == "" {
 		errs = append(errs, errors.New("GITHUB_APP_CLIENT_ID is required"))

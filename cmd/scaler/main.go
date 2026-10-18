@@ -17,18 +17,20 @@ import (
 var version = "dev"
 
 func main() {
-	if err := run(); err != nil {
-		slog.Error("scaler failed", "error", err)
+	// JSON logging from the first line, so startup failures (config, auth) are JSON too.
+	log := newLogger(os.Getenv("LOG_LEVEL"))
+	slog.SetDefault(log)
+	if err := run(log); err != nil {
+		log.Error("scaler failed", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+func run(log *slog.Logger) error {
 	cfg, err := config.FromEnv()
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
-	log := newLogger(cfg.LogLevel)
 	log.Info("starting", "version", version, "url", cfg.GitHubConfigURL, "scaleSet", cfg.ScaleSetName,
 		"minRunners", cfg.MinRunners, "maxRunners", cfg.MaxRunners)
 
@@ -51,7 +53,8 @@ func run() error {
 	return nil
 }
 
-// newLogger logs JSON, which Loki and kubectl logs | jq both read well.
+// newLogger logs JSON, which Loki and kubectl logs | jq both read well. LOG_LEVEL is
+// debug, info (default), warn or error.
 func newLogger(level string) *slog.Logger {
 	var l slog.Level
 	if err := l.UnmarshalText([]byte(level)); err != nil {

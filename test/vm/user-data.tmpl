@@ -1,0 +1,8 @@
+#cloud-config
+write_files:
+  - path: /etc/actions-runner/jitconfig
+    owner: root:root
+    permissions: "0600"
+    content: ${JIT_CONFIG}
+runcmd:
+  - [systemctl, start, --no-block, actions-runner.service]

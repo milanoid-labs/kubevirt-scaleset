@@ -1,0 +1,44 @@
+name: VM smoke
+
+# Checks that a runner VM is a usable CI machine. Manual only: pick the runner label.
+# homelab-vm-test is the hand-made VM from vm-image/test/; homelab-vm is the scaler's scale set.
+on:
+  workflow_dispatch:
+    inputs:
+      runs-on:
+        description: Runner label
+        default: homelab-vm-test
+        type: choice
+        options: [homelab-vm-test, homelab-vm]
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 15
+    steps:
+      - name: machine
+        run: |
+          uname -a
+          nproc; free -h; df -h /
+          cat /etc/homelab-runner-vm/versions.txt
+          echo "ImageOS=$ImageOS"
+          test "$ImageOS" = ubuntu24
+
+      - name: sudo
+        run: sudo -n true && sudo -n apt-get --version | head -1
+
+      - name: docker
+        run: |
+          docker version --format 'client {{.Client.Version}} / server {{.Server.Version}}'
+          docker buildx version
+          docker compose version
+          docker run --rm hello-world
+
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: container job tooling
+        run: docker run --rm -v "$PWD:/src" -w /src alpine:3 ls -la

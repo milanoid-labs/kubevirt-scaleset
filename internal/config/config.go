@@ -80,10 +80,10 @@ func FromEnv() (Config, error) {
 		errs = append(errs, fmt.Errorf("need 0 <= MIN_RUNNERS (%d) <= MAX_RUNNERS (%d), MAX_RUNNERS >= 1", c.MinRunners, c.MaxRunners))
 	}
 
-	// The name prefixes VMI and Secret names (<name>-xxxxxxxx[-userdata]) and is a label
-	// value: a DNS label of up to 63 characters covers both.
-	for _, msg := range validation.IsDNS1123Label(c.ScaleSetName + "-xxxxxxxx") {
-		errs = append(errs, fmt.Errorf("SCALE_SET_NAME %q (lowercase, digits and -, at most 54 characters): %s", c.ScaleSetName, msg))
+	// The name is a label value and prefixes VMI and Secret names (<name>-xxxxxxxx[-userdata]):
+	// a DNS label (which also ends in a letter or digit) short enough for the suffix covers both.
+	if msgs := validation.IsDNS1123Label(c.ScaleSetName); len(msgs) > 0 || len(c.ScaleSetName) > 54 {
+		errs = append(errs, fmt.Errorf("SCALE_SET_NAME %q must be lowercase letters, digits and -, start and end with a letter or digit, at most 54 characters: %v", c.ScaleSetName, msgs))
 	}
 
 	if c.VMImage == "" {

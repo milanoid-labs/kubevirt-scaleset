@@ -32,6 +32,7 @@ func TestRejectsBadValues(t *testing.T) {
 		{"SCALE_SET_NAME", "MyRunners", "SCALE_SET_NAME"},
 		{"SCALE_SET_NAME", "runners_vm", "SCALE_SET_NAME"},
 		{"SCALE_SET_NAME", strings.Repeat("a", 55), "SCALE_SET_NAME"},
+		{"SCALE_SET_NAME", "runners-", "SCALE_SET_NAME"}, // valid with the suffix, not as a label value
 		{"VM_MEMORY", "-1Gi", "VM_MEMORY"},
 		{"VM_MEMORY", "0", "VM_MEMORY"},
 		{"RUNNER_IDLE_TIMEOUT", "0s", "RUNNER_IDLE_TIMEOUT"},

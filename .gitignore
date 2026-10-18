@@ -1,3 +1,8 @@
 .DS_Store
 .idea/
 .vscode/
+
+# vm-image build outputs
+vm-image/work/
+vm-image/out/
+vm-image/containerdisk/disk.qcow2

@@ -4,6 +4,7 @@ package vm
 
 import (
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -51,8 +52,9 @@ func (s Spec) labels() map[string]string {
 	return map[string]string{ManagedByLabel: ManagedBy, ScaleSetLabel: s.ScaleSet}
 }
 
-// SecretName is the cloud-init Secret of VM name.
-func SecretName(name string) string { return name + "-userdata" }
+// SecretName is the cloud-init Secret of VM name; VMName is the reverse.
+func SecretName(name string) string   { return name + "-userdata" }
+func VMName(secretName string) string { return strings.TrimSuffix(secretName, "-userdata") }
 
 // Secret holds the user-data. The JIT config is a credential, so it never goes inline
 // into the VMI spec, where anyone allowed to read VMIs would see it.

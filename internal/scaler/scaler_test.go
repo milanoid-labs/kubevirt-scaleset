@@ -10,15 +10,18 @@ import (
 
 	"github.com/actions/scaleset"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	clienttesting "k8s.io/client-go/testing"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/milanoid-labs/kubevirt-scaleset/internal/vm"
 )
@@ -114,7 +117,7 @@ func TestScaleUpCreatesVMIAndOwnedSecret(t *testing.T) {
 		t.Errorf("firmware = %+v, want UEFI without Secure Boot", fw)
 	}
 	if id := v.Annotations[vm.RunnerIDAnnotation]; id != "100" {
-		t.Errorf("runner ID annotation = %q, want 100", id)
+		t.Errorf("VMI runner ID annotation = %q, want 100", id)
 	}
 	if v.Spec.Volumes[0].ContainerDisk.Image != "registry/vm@sha256:abc" {
 		t.Errorf("image = %q", v.Spec.Volumes[0].ContainerDisk.Image)
@@ -128,6 +131,9 @@ func TestScaleUpCreatesVMIAndOwnedSecret(t *testing.T) {
 	ud := sec.StringData["userdata"] + string(sec.Data["userdata"])
 	if !strings.Contains(ud, "content: jit-for-"+v.Name) || !strings.Contains(ud, "actions-runner.service") {
 		t.Errorf("user-data does not follow the boot contract:\n%s", ud)
+	}
+	if id := sec.Annotations[vm.RunnerIDAnnotation]; id != "100" {
+		t.Errorf("secret runner ID annotation = %q, want 100", id)
 	}
 	if len(sec.OwnerReferences) != 1 || sec.OwnerReferences[0].Name != v.Name || sec.OwnerReferences[0].Kind != "VirtualMachineInstance" {
 		t.Errorf("secret owners = %+v, want the VMI", sec.OwnerReferences)
@@ -168,5 +174,55 @@ func TestMinRunnersKeepsWarmVMs(t *testing.T) {
 	s.MinRunners = 1
 	if got, _ := s.HandleDesiredRunnerCount(context.Background(), 0); got != 1 {
 		t.Fatalf("got %d, want MinRunners 1", got)
+	}
+}
+
+// failVMICreate makes every VMI create fail with err; other objects go through.
+func failVMICreate(s *Scaler, err error) {
+	s.Kube = interceptor.NewClient(s.Kube.(client.WithWatch), interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*kubevirtv1.VirtualMachineInstance); ok {
+				return err
+			}
+			return c.Create(ctx, obj, opts...)
+		},
+	})
+}
+
+func listSecrets(t *testing.T, s *Scaler) []corev1.Secret {
+	t.Helper()
+	var l corev1.SecretList
+	if err := s.Kube.List(context.Background(), &l, client.InNamespace("runners")); err != nil {
+		t.Fatal(err)
+	}
+	return l.Items
+}
+
+func TestRejectedVMIRollsBack(t *testing.T) {
+	s, gh := newScaler(t)
+	failVMICreate(s, apierrors.NewInvalid(schema.GroupKind{Group: "kubevirt.io", Kind: "VirtualMachineInstance"}, "x", nil))
+
+	if got, _ := s.HandleDesiredRunnerCount(context.Background(), 1); got != 0 {
+		t.Fatalf("got %d, want 0", got)
+	}
+	if n := len(listSecrets(t, s)); n != 0 {
+		t.Errorf("%d secrets left, want the rollback to delete it", n)
+	}
+	if len(gh.removed) != 1 {
+		t.Errorf("removed runners %v, want the new runner", gh.removed)
+	}
+}
+
+func TestUncertainVMICreateLeavesItToTheReaper(t *testing.T) {
+	// A timeout: the VMI may exist after all, so its Secret and runner must stay.
+	s, gh := newScaler(t)
+	failVMICreate(s, apierrors.NewTimeoutError("create", 5))
+
+	s.HandleDesiredRunnerCount(context.Background(), 1)
+	if n := len(listSecrets(t, s)); n != 1 {
+		t.Errorf("%d secrets, want the Secret kept", n)
+	}
+	if len(gh.removed) != 0 {
+		t.Errorf("removed runners %v, want none", gh.removed)
 	}
 }

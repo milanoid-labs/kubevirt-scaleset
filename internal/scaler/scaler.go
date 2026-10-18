@@ -14,6 +14,7 @@ import (
 
 	"github.com/actions/scaleset"
 	"github.com/actions/scaleset/listener"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -115,20 +116,32 @@ func (s *Scaler) createRunner(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("JIT config for %s: %w", name, err)
 	}
 
+	// Both objects carry the runner ID, so whatever step fails, the reaper can still
+	// unregister the runner (the Secret exists before the VMI).
+	ann := map[string]string{}
+	if jit.Runner != nil {
+		ann[vm.RunnerIDAnnotation] = strconv.Itoa(jit.Runner.ID)
+	}
 	secret := s.VM.Secret(name, jit.EncodedJITConfig)
+	secret.Annotations = ann
 	if err := s.Kube.Create(ctx, secret); err != nil {
+		// Safe even if the Secret was created after all: the reaper then finds it
+		// ownerless, without a VMI, and its runner already gone.
 		s.removeUnusedRunner(ctx, name, jit.Runner)
 		return "", fmt.Errorf("create secret %s: %w", secret.Name, err)
 	}
 	vmi := s.VM.VMI(name)
-	if jit.Runner != nil {
-		vmi.Annotations = map[string]string{vm.RunnerIDAnnotation: strconv.Itoa(jit.Runner.ID)}
-	}
+	vmi.Annotations = ann
 	if err := s.Kube.Create(ctx, vmi); err != nil {
-		if derr := s.Kube.Delete(ctx, secret); derr != nil {
-			s.Log.Warn("deleting unused secret", "name", secret.Name, "error", derr)
+		// Roll back only if the API server surely refused the VMI. After a timeout or a
+		// dropped connection it may exist anyway; the reaper settles that from the
+		// ownerless Secret (adopts it, or unregisters the runner and deletes it).
+		if rejected(err) {
+			if derr := s.Kube.Delete(ctx, secret); derr != nil {
+				s.Log.Warn("deleting unused secret", "name", secret.Name, "error", derr)
+			}
+			s.removeUnusedRunner(ctx, name, jit.Runner)
 		}
-		s.removeUnusedRunner(ctx, name, jit.Runner)
 		return "", fmt.Errorf("create VMI %s: %w", name, err)
 	}
 
@@ -139,6 +152,7 @@ func (s *Scaler) createRunner(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("owner reference on %s: %w", secret.Name, err)
 	}
 	if err := s.Kube.Patch(ctx, secret, patch); err != nil {
+		// The VMI exists and will boot; the reaper adopts the Secret later.
 		return "", fmt.Errorf("set owner of %s: %w", secret.Name, err)
 	}
 	return name, nil
@@ -160,4 +174,11 @@ func (s *Scaler) removeUnusedRunner(ctx context.Context, name string, r *scalese
 	if err := s.GitHub.RemoveRunner(ctx, int64(r.ID)); err != nil && !errors.Is(err, scaleset.RunnerNotFoundError) {
 		s.Log.Warn("removing unused runner", "name", name, "error", err)
 	}
+}
+
+// rejected tells a definite refusal by the API server from an unknown outcome (timeout,
+// connection error), after which the object may or may not exist.
+func rejected(err error) bool {
+	return apierrors.IsInvalid(err) || apierrors.IsBadRequest(err) || apierrors.IsForbidden(err) ||
+		apierrors.IsAlreadyExists(err) || apierrors.IsNotFound(err)
 }

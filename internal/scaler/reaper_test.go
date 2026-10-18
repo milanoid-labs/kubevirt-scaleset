@@ -86,27 +86,63 @@ func TestReapAlreadyRemovedRunner(t *testing.T) {
 	}
 }
 
-func TestReapOrphanSecrets(t *testing.T) {
-	secret := func(name string, age time.Duration, owned bool) *corev1.Secret {
-		s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-			Name: name, Namespace: "runners", CreationTimestamp: metav1.NewTime(time.Now().Add(-age)),
-			Labels: map[string]string{vm.ManagedByLabel: vm.ManagedBy, vm.ScaleSetLabel: "homelab-runners-vm"},
-		}}
-		if owned {
-			s.OwnerReferences = []metav1.OwnerReference{{APIVersion: "kubevirt.io/v1", Kind: "VirtualMachineInstance", Name: "x", UID: "u"}}
-		}
-		return s
+// agedSecret is a scale set Secret created age ago for runner id, owned by a VMI or not.
+func agedSecret(name, id string, age time.Duration, owned bool) *corev1.Secret {
+	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name: name, Namespace: "runners", CreationTimestamp: metav1.NewTime(time.Now().Add(-age)),
+		Labels:      map[string]string{vm.ManagedByLabel: vm.ManagedBy, vm.ScaleSetLabel: "homelab-runners-vm"},
+		Annotations: map[string]string{vm.RunnerIDAnnotation: id},
+	}}
+	if owned {
+		sec.OwnerReferences = []metav1.OwnerReference{{APIVersion: "kubevirt.io/v1", Kind: "VirtualMachineInstance", Name: "x", UID: "u"}}
 	}
-	s, _ := newScaler(t,
-		secret("orphan", 10*time.Minute, false),
-		secret("just-created", 10*time.Second, false),
-		secret("owned", 10*time.Minute, true),
+	return sec
+}
+
+func TestReapOrphanSecrets(t *testing.T) {
+	s, gh := newScaler(t,
+		agedSecret("orphan-userdata", "1", 10*time.Minute, false),
+		agedSecret("just-created-userdata", "2", 10*time.Second, false),
+		agedSecret("owned-userdata", "3", 10*time.Minute, true),
 	)
 	s.Reap(context.Background())
 
-	for name, want := range map[string]bool{"orphan": false, "just-created": true, "owned": true} {
+	for name, want := range map[string]bool{"orphan-userdata": false, "just-created-userdata": true, "owned-userdata": true} {
 		if got := exists(t, s, &corev1.Secret{}, name); got != want {
 			t.Errorf("secret %s exists = %v, want %v", name, got, want)
 		}
+	}
+	if len(gh.removed) != 1 || gh.removed[0] != 1 {
+		t.Errorf("removed runners %v, want only the orphan's runner 1", gh.removed)
+	}
+}
+
+func TestReapAdoptsSecretOfExistingVM(t *testing.T) {
+	// The scaler stopped after creating the VMI but before setting the Secret's owner;
+	// the VM may still be booting and need its user-data.
+	v := agedVMI("booting", "1", kubevirtv1.Scheduling, 5*time.Minute)
+	v.UID = "vmi-uid"
+	s, gh := newScaler(t, v, agedSecret(vm.SecretName("booting"), "1", 5*time.Minute, false))
+	s.Reap(context.Background())
+
+	var sec corev1.Secret
+	if !exists(t, s, &sec, vm.SecretName("booting")) {
+		t.Fatal("secret of an existing VM deleted")
+	}
+	if len(sec.OwnerReferences) != 1 || sec.OwnerReferences[0].UID != "vmi-uid" {
+		t.Errorf("owners = %+v, want the VMI", sec.OwnerReferences)
+	}
+	if len(gh.removed) != 0 {
+		t.Errorf("removed runners %v, want none", gh.removed)
+	}
+}
+
+func TestReapKeepsOrphanSecretWhenRunnerRemovalFails(t *testing.T) {
+	// The Secret is the only record of the runner ID: keep it until removal works.
+	s, gh := newScaler(t, agedSecret("orphan-userdata", "1", 10*time.Minute, false))
+	gh.busy = map[int64]error{1: context.DeadlineExceeded}
+	s.Reap(context.Background())
+	if !exists(t, s, &corev1.Secret{}, "orphan-userdata") {
+		t.Error("secret deleted although its runner is still registered")
 	}
 }

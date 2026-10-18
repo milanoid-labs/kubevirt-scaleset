@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 type Config struct {
@@ -79,6 +80,12 @@ func FromEnv() (Config, error) {
 		errs = append(errs, fmt.Errorf("need 0 <= MIN_RUNNERS (%d) <= MAX_RUNNERS (%d), MAX_RUNNERS >= 1", c.MinRunners, c.MaxRunners))
 	}
 
+	// The name prefixes VMI and Secret names (<name>-xxxxxxxx[-userdata]) and is a label
+	// value: a DNS label of up to 63 characters covers both.
+	for _, msg := range validation.IsDNS1123Label(c.ScaleSetName + "-xxxxxxxx") {
+		errs = append(errs, fmt.Errorf("SCALE_SET_NAME %q (lowercase, digits and -, at most 54 characters): %s", c.ScaleSetName, msg))
+	}
+
 	if c.VMImage == "" {
 		errs = append(errs, errors.New("VM_IMAGE is required"))
 	}
@@ -89,6 +96,8 @@ func FromEnv() (Config, error) {
 	c.VMCores = uint32(cores)
 	if c.VMMemory, err = resource.ParseQuantity(env("VM_MEMORY", "4Gi")); err != nil {
 		errs = append(errs, fmt.Errorf("VM_MEMORY: %w", err))
+	} else if c.VMMemory.Sign() <= 0 {
+		errs = append(errs, fmt.Errorf("VM_MEMORY must be positive, got %s", c.VMMemory.String()))
 	}
 	if c.IdleTimeout, err = time.ParseDuration(env("RUNNER_IDLE_TIMEOUT", "15m")); err != nil || c.IdleTimeout <= 0 {
 		errs = append(errs, fmt.Errorf("RUNNER_IDLE_TIMEOUT must be a positive duration like 15m: %v", err))

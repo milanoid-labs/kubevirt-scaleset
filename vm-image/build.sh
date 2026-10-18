@@ -76,18 +76,13 @@ $G virt-customize -a "$WORK/build.qcow2" --network --smp 2 \
     } > /etc/homelab-runner-vm/versions.txt" \
   --run-command 'apt-get clean && rm -rf /var/lib/apt/lists/*' \
   --run-command 'cloud-init clean --logs' \
-  --truncate /etc/machine-id
+  --truncate /etc/machine-id \
+  --run-command 'test "$(findmnt -no SOURCE /)" = /dev/sda1 && test -f /etc/machine-id && test ! -s /etc/machine-id'
 # cloud-init clean --machine-id would delete the file here (no systemd running in the build),
 # and without it networkd's DHCP client fails. Empty is systemd's "first boot, make an ID".
+# The last command fails the build unless root is still partition 1 and that file is empty.
 
 $G virt-cat -a "$WORK/build.qcow2" /etc/homelab-runner-vm/versions.txt | tee "$OUT/versions.txt"
-
-# Boot prerequisites: root still partition 1, /etc/machine-id present and empty.
-$G guestfish --ro -a "$WORK/build.qcow2" -i <<'EOF' | tee "$WORK/checks.txt"
-part-list /dev/sda
-filesize /etc/machine-id
-EOF
-[ "$(tail -1 "$WORK/checks.txt")" = 0 ] || { echo "::error::/etc/machine-id must exist and be empty"; exit 1; }
 
 # 3. Trim unused blocks, then compress (~1 GB). virt-sparsify's copy mode needs 20G scratch
 #    space and prompts interactively when short, so trim in place and convert with qemu-img.

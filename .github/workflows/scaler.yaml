@@ -61,11 +61,12 @@ jobs:
         id: tag
         run: echo "tag=$(date -u +%Y%m%d)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
+      # Same flags as vet/test (no -trimpath), so it reuses their compiled packages.
       - name: build binary
         env:
           GOOS: linux
           GOARCH: amd64
-        run: go build -trimpath -ldflags "-s -w -X main.version=${{ steps.tag.outputs.tag }}" -o out/scaler ./cmd/scaler
+        run: go build -ldflags "-s -w -X main.version=${{ steps.tag.outputs.tag }}" -o out/scaler ./cmd/scaler
 
       - name: set up Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1

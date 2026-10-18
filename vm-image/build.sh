@@ -33,14 +33,18 @@ export LIBGUESTFS_BACKEND=direct
 export LIBGUESTFS_MEMSIZE=2048   # helper VM RAM; the runner container's limit is 4Gi
 G="sudo -E"                      # libguestfs reads the kernel in /boot, root-only on Ubuntu
 
-# 1. The cloud image's root filesystem has <1 GB free: copy it into a DISK_SIZE disk.
+# 1. The cloud image's root filesystem has <1 GB free: grow the disk to DISK_SIZE, then
+#    (first step below) partition 1 and its filesystem in place, like cloud-init does on
+#    first boot. Not virt-resize: it renumbers the partitions (root sits after 14/15/16 on
+#    disk), and BIOS GRUB then stops at "no such partition".
 rm -f "$WORK/build.qcow2"
-qemu-img create -f qcow2 "$WORK/build.qcow2" "$DISK_SIZE"
-$G virt-resize --expand /dev/sda1 "$WORK/base.img" "$WORK/build.qcow2"
+qemu-img convert -O qcow2 "$WORK/base.img" "$WORK/build.qcow2"
+qemu-img resize "$WORK/build.qcow2" "$DISK_SIZE"
 
 # 2. Install everything. dirmngr: sonarqube-scan-action verifies its scanner with GPG.
 #    .env: environment for every job; ImageOS is what setup-* actions use to pick builds.
 $G virt-customize -a "$WORK/build.qcow2" --network --smp 2 \
+  --run-command 'growpart /dev/sda 1 && resize2fs /dev/sda1' \
   --install qemu-guest-agent,git,jq,unzip,zip,dirmngr,gnupg \
   --run-command 'install -m 0755 -d /etc/apt/keyrings
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
@@ -71,7 +75,12 @@ $G virt-customize -a "$WORK/build.qcow2" --network --smp 2 \
       docker-compose-plugin git jq unzip zip dirmngr gnupg qemu-guest-agent;
     } > /etc/homelab-runner-vm/versions.txt" \
   --run-command 'apt-get clean && rm -rf /var/lib/apt/lists/*' \
-  --run-command 'cloud-init clean --logs --machine-id'   # first boot of each VM = new instance
+  --run-command 'cloud-init clean --logs' \
+  --truncate /etc/machine-id \
+  --run-command 'test "$(findmnt -no SOURCE /)" = /dev/sda1 && test -f /etc/machine-id && test ! -s /etc/machine-id'
+# cloud-init clean --machine-id would delete the file here (no systemd running in the build),
+# and without it networkd's DHCP client fails. Empty is systemd's "first boot, make an ID".
+# The last command fails the build unless root is still partition 1 and that file is empty.
 
 $G virt-cat -a "$WORK/build.qcow2" /etc/homelab-runner-vm/versions.txt | tee "$OUT/versions.txt"
 

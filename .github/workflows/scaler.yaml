@@ -27,8 +27,7 @@ concurrency:
 
 jobs:
   test:
-    # GitHub-hosted: nothing here needs the LAN.
-    runs-on: ubuntu-latest
+    runs-on: homelab-runners
     timeout-minutes: 15
     steps:
       - name: checkout
@@ -45,13 +44,22 @@ jobs:
       - name: vet
         run: go vet ./...
 
+      # -race needs cgo, so a C compiler; the runner image may not have one.
+      - name: install gcc
+        run: |
+          command -v gcc || {
+            sudo apt-get update
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc libc6-dev
+          }
+
       # -race: the reaper and the listener run side by side.
       - name: test
         run: go test -race ./...
 
   image:
     needs: test
-    runs-on: ubuntu-latest
+    # The build runs in the dind sidecar (1Gi limit), compiling included.
+    runs-on: homelab-runners
     timeout-minutes: 20
     permissions:
       contents: read

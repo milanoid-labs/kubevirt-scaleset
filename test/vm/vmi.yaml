@@ -17,6 +17,10 @@ spec:
   evictionStrategy: None   # a job VM is never live-migrated; it just ends
   terminationGracePeriodSeconds: 30
   domain:
+    firmware:
+      bootloader:
+        efi:
+          secureBoot: false   # Secure Boot would also need SMM; plain UEFI is enough
     cpu:
       cores: 2
     memory:

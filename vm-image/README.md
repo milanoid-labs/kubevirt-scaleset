@@ -21,7 +21,7 @@ overlay), runs exactly one job and powers off. Nothing survives between jobs.
 | git, jq, unzip, zip, dirmngr, gnupg, qemu-guest-agent | Ubuntu archive at build time | same |
 
 Keep `RUNNER_VERSION` and `GH_VERSION` equal to homelab-cluster's `runner/Dockerfile`, so a
-workflow behaves the same on `homelab-runners` (pods) and `homelab-vm` (VMs).
+workflow behaves the same on `homelab-runners` (pods) and `homelab-runners-vm` (VMs).
 
 User `runner` (uid from `useradd`) is in `docker` and `sudo`, with passwordless sudo, like
 the pod runners and GitHub-hosted runners. The runner lives in `/opt/actions-runner`; its
@@ -45,6 +45,10 @@ runcmd:
   - [systemctl, start, --no-block, actions-runner.service]
 ```
 
+The VM boots with UEFI or BIOS; the scaler uses UEFI. Partition 1 is the root filesystem,
+14/15/16 are BIOS boot, EFI and `/boot`, as in Ubuntu's image (the build grows partition 1 in
+place, so GRUB still finds them). `/etc/machine-id` is empty, so every VM generates its own.
+
 The unit then runs `run.sh --jitconfig …` as `runner` (the file reaches it via systemd
 `LoadCredential`), and **powers the VM off when the runner exits**, however it ends. The
 VMI turns `Succeeded` and the scaler deletes it with its Secret. A VM booted without this
@@ -55,7 +59,7 @@ user-data never starts the runner, and the scaler's boot timeout reaps it.
 CI (`.github/workflows/vm-image.yaml`) runs on `homelab-runners`: PRs build only, `main`
 builds and pushes with the Nexus user `ci-push` (repo secret `NEXUS_PUSH_PASSWORD`,
 variables `NEXUS_PUSH_USERNAME`, `NEXUS_REGISTRY`). The pods have no `/dev/kvm`, so
-libguestfs emulates and a build takes ~75 min.
+libguestfs emulates and a build takes about an hour.
 
 Locally, on Ubuntu 24.04:
 
@@ -74,13 +78,5 @@ podman cp tmp:/disk/disk.qcow2 . && podman rm tmp
 
 ## Testing without the scaler
 
-A JIT config can also be made with the REST API, so a single VM can be tested by hand:
-
-```sh
-gh api -X POST orgs/milanoid-labs/actions/runners/generate-jitconfig \
-  -f name=vm-test-1 -F runner_group_id=1 -f 'labels[]=homelab-vm-test' -f work_folder=_work \
-  -q .encoded_jit_config
-```
-
-Put it into the user-data above, boot a VMI from the image on kubevirt01, and run a
-`workflow_dispatch` job with `runs-on: homelab-vm-test`.
+[`test/vm/`](../test/vm/) boots one VM from a published image by hand, with a JIT config made
+with `gh api`, and the `VM smoke` workflow runs a job on it.

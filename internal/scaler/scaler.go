@@ -5,9 +5,12 @@ package scaler
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/actions/scaleset"
 	"github.com/actions/scaleset/listener"
@@ -18,19 +21,23 @@ import (
 	"github.com/milanoid-labs/kubevirt-scaleset/internal/vm"
 )
 
-// JITConfigs is the part of the scaleset client the scaler needs (a fake in tests).
-type JITConfigs interface {
+// Runners is the part of the scaleset client the scaler needs (a fake in tests).
+type Runners interface {
 	GenerateJitRunnerConfig(ctx context.Context, setting *scaleset.RunnerScaleSetJitRunnerSetting, scaleSetID int) (*scaleset.RunnerScaleSetJitRunnerConfig, error)
+	RemoveRunner(ctx context.Context, runnerID int64) error
 }
 
 type Scaler struct {
 	Kube       client.Client
-	GitHub     JITConfigs
+	GitHub     Runners
 	ScaleSetID int
 	VM         vm.Spec
 	MinRunners int
 	MaxRunners int
-	Log        *slog.Logger
+	// IdleTimeout is how long a VM may exist without running a job (boot included)
+	// before the reaper removes it.
+	IdleTimeout time.Duration
+	Log         *slog.Logger
 }
 
 var _ listener.Scaler = (*Scaler)(nil)
@@ -82,9 +89,7 @@ func (s *Scaler) HandleJobCompleted(_ context.Context, job *scaleset.JobComplete
 // Succeeded/Failed (finished, waiting for the reaper).
 func (s *Scaler) countActive(ctx context.Context) (int, error) {
 	var vmis kubevirtv1.VirtualMachineInstanceList
-	if err := s.Kube.List(ctx, &vmis, client.InNamespace(s.VM.Namespace), client.MatchingLabels{
-		vm.ManagedByLabel: vm.ManagedBy, vm.ScaleSetLabel: s.VM.ScaleSet,
-	}); err != nil {
+	if err := s.Kube.List(ctx, &vmis, s.owned()...); err != nil {
 		return 0, err
 	}
 	n := 0
@@ -112,13 +117,18 @@ func (s *Scaler) createRunner(ctx context.Context) (string, error) {
 
 	secret := s.VM.Secret(name, jit.EncodedJITConfig)
 	if err := s.Kube.Create(ctx, secret); err != nil {
+		s.removeUnusedRunner(ctx, name, jit.Runner)
 		return "", fmt.Errorf("create secret %s: %w", secret.Name, err)
 	}
 	vmi := s.VM.VMI(name)
+	if jit.Runner != nil {
+		vmi.Annotations = map[string]string{vm.RunnerIDAnnotation: strconv.Itoa(jit.Runner.ID)}
+	}
 	if err := s.Kube.Create(ctx, vmi); err != nil {
 		if derr := s.Kube.Delete(ctx, secret); derr != nil {
 			s.Log.Warn("deleting unused secret", "name", secret.Name, "error", derr)
 		}
+		s.removeUnusedRunner(ctx, name, jit.Runner)
 		return "", fmt.Errorf("create VMI %s: %w", name, err)
 	}
 
@@ -132,4 +142,22 @@ func (s *Scaler) createRunner(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("set owner of %s: %w", secret.Name, err)
 	}
 	return name, nil
+}
+
+// owned selects this scale set's objects in the namespace.
+func (s *Scaler) owned() []client.ListOption {
+	return []client.ListOption{client.InNamespace(s.VM.Namespace), client.MatchingLabels{
+		vm.ManagedByLabel: vm.ManagedBy, vm.ScaleSetLabel: s.VM.ScaleSet,
+	}}
+}
+
+// removeUnusedRunner unregisters a JIT runner whose VM was never created, so it doesn't
+// linger as an offline runner in GitHub.
+func (s *Scaler) removeUnusedRunner(ctx context.Context, name string, r *scaleset.RunnerReference) {
+	if r == nil {
+		return
+	}
+	if err := s.GitHub.RemoveRunner(ctx, int64(r.ID)); err != nil && !errors.Is(err, scaleset.RunnerNotFoundError) {
+		s.Log.Warn("removing unused runner", "name", name, "error", err)
+	}
 }

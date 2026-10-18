@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/actions/scaleset/listener"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -42,7 +43,8 @@ func run(log *slog.Logger) error {
 		return fmt.Errorf("config: %w", err)
 	}
 	log.Info("starting", "version", version, "url", cfg.GitHubConfigURL, "scaleSet", cfg.ScaleSetName,
-		"minRunners", cfg.MinRunners, "maxRunners", cfg.MaxRunners, "namespace", cfg.Namespace, "image", cfg.VMImage)
+		"minRunners", cfg.MinRunners, "maxRunners", cfg.MaxRunners, "namespace", cfg.Namespace, "image", cfg.VMImage,
+		"idleTimeout", cfg.IdleTimeout)
 
 	// SIGTERM is what Kubernetes sends on pod shutdown, SIGINT is Ctrl-C locally.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -95,10 +97,14 @@ func run(log *slog.Logger) error {
 			CPUCores:  cfg.VMCores,
 			Memory:    cfg.VMMemory,
 		},
-		MinRunners: cfg.MinRunners,
-		MaxRunners: cfg.MaxRunners,
-		Log:        log.WithGroup("scaler"),
+		MinRunners:  cfg.MinRunners,
+		MaxRunners:  cfg.MaxRunners,
+		IdleTimeout: cfg.IdleTimeout,
+		Log:         log.WithGroup("scaler"),
 	}
+
+	// The reaper runs beside the listener and stops with it (same ctx).
+	go s.RunReaper(ctx, 30*time.Second)
 
 	log.Info("listening for jobs")
 	if err := l.Run(ctx, s); err != nil && !errors.Is(err, context.Canceled) {

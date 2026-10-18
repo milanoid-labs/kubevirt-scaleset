@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/actions/scaleset"
 	corev1 "k8s.io/api/core/v1"
@@ -22,14 +23,30 @@ import (
 	"github.com/milanoid-labs/kubevirt-scaleset/internal/vm"
 )
 
-type fakeJIT struct{ names []string }
-
-func (f *fakeJIT) GenerateJitRunnerConfig(_ context.Context, s *scaleset.RunnerScaleSetJitRunnerSetting, _ int) (*scaleset.RunnerScaleSetJitRunnerConfig, error) {
-	f.names = append(f.names, s.Name)
-	return &scaleset.RunnerScaleSetJitRunnerConfig{EncodedJITConfig: "jit-for-" + s.Name}, nil
+// fakeGitHub hands out runner IDs 100, 101, ...; RemoveRunner returns busy[id] if set.
+type fakeGitHub struct {
+	names   []string
+	removed []int64
+	busy    map[int64]error
 }
 
-func newScaler(t *testing.T, objs ...client.Object) (*Scaler, *fakeJIT) {
+func (f *fakeGitHub) GenerateJitRunnerConfig(_ context.Context, s *scaleset.RunnerScaleSetJitRunnerSetting, _ int) (*scaleset.RunnerScaleSetJitRunnerConfig, error) {
+	f.names = append(f.names, s.Name)
+	return &scaleset.RunnerScaleSetJitRunnerConfig{
+		Runner:           &scaleset.RunnerReference{ID: 99 + len(f.names), Name: s.Name},
+		EncodedJITConfig: "jit-for-" + s.Name,
+	}, nil
+}
+
+func (f *fakeGitHub) RemoveRunner(_ context.Context, id int64) error {
+	if err := f.busy[id]; err != nil {
+		return err
+	}
+	f.removed = append(f.removed, id)
+	return nil
+}
+
+func newScaler(t *testing.T, objs ...client.Object) (*Scaler, *fakeGitHub) {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
@@ -38,7 +55,7 @@ func newScaler(t *testing.T, objs ...client.Object) (*Scaler, *fakeJIT) {
 	if err := kubevirtv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	jit := &fakeJIT{}
+	jit := &fakeGitHub{}
 	return &Scaler{
 		// A plain object tracker: the default one tracks managed fields and panics on
 		// KubeVirt's uint64 fields (a fake-client limitation, the API server is fine).
@@ -51,9 +68,10 @@ func newScaler(t *testing.T, objs ...client.Object) (*Scaler, *fakeJIT) {
 			Namespace: "runners", ScaleSet: "homelab-runners-vm",
 			Image: "registry/vm@sha256:abc", CPUCores: 2, Memory: resource.MustParse("4Gi"),
 		},
-		MinRunners: 0,
-		MaxRunners: 2,
-		Log:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		MinRunners:  0,
+		MaxRunners:  2,
+		IdleTimeout: 15 * time.Minute,
+		Log:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}, jit
 }
 
@@ -94,6 +112,9 @@ func TestScaleUpCreatesVMIAndOwnedSecret(t *testing.T) {
 	}
 	if fw := v.Spec.Domain.Firmware; fw == nil || fw.Bootloader.EFI == nil || *fw.Bootloader.EFI.SecureBoot {
 		t.Errorf("firmware = %+v, want UEFI without Secure Boot", fw)
+	}
+	if id := v.Annotations[vm.RunnerIDAnnotation]; id != "100" {
+		t.Errorf("runner ID annotation = %q, want 100", id)
 	}
 	if v.Spec.Volumes[0].ContainerDisk.Image != "registry/vm@sha256:abc" {
 		t.Errorf("image = %q", v.Spec.Volumes[0].ContainerDisk.Image)

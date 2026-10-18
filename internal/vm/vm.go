@@ -17,6 +17,8 @@ const (
 	ManagedBy      = "kubevirt-scaleset"
 	// ScaleSetLabel tells VMs of different scale sets apart in the same namespace.
 	ScaleSetLabel = "kubevirt-scaleset.milanoid.net/scale-set"
+	// RunnerIDAnnotation is the GitHub runner ID of the VM, for removing its registration.
+	RunnerIDAnnotation = "kubevirt-scaleset.milanoid.net/runner-id"
 
 	// NodeLabel/NodeTaint reserve kubevirt01 for runner VMs (homelab-cluster CLAUDE.md).
 	NodeLabel = "homelab.milanoid.net/kubevirt-runners"

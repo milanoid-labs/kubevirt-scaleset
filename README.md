@@ -25,13 +25,22 @@ Configured by environment variables (defaults in [`internal/config`](internal/co
 | `NAMESPACE` | `kubevirt-runners` | where the runner VMIs and their Secrets live |
 | `VM_IMAGE` | required | the containerDisk, pinned by digest |
 | `VM_CPU_CORES`, `VM_MEMORY` | `2`, `4Gi` | per runner VM |
+| `RUNNER_IDLE_TIMEOUT` | `15m` | a VM that hasn't started a job this long after creation is removed |
 | `LOG_LEVEL` | `info` | JSON logs |
 
 The scale set is looked up by name and created if missing, never deleted: restarts keep its
 ID and the queued jobs. For every assigned job (up to `MAX_RUNNERS`) the scaler registers a
 JIT runner and creates a cloud-init Secret plus a VirtualMachineInstance of the same name;
 the VMI owns the Secret. The VMIs in the namespace are the state, so a restart neither loses
-nor duplicates VMs. The Kubernetes client uses the pod's ServiceAccount, or `KUBECONFIG`.
+nor duplicates VMs.
+
+Every 30 s a reaper deletes the VMs that are finished (`Succeeded`/`Failed`) or idle past
+`RUNNER_IDLE_TIMEOUT` (stuck boot, failing image pull, or its job was taken by another
+runner), and Secrets that never got their VMI as owner. It first removes the runner's
+GitHub registration; GitHub refuses that while the runner runs a job, which keeps long jobs
+safe. Warm runners (`MIN_RUNNERS`) are therefore replaced every `RUNNER_IDLE_TIMEOUT`.
+
+The Kubernetes client uses the pod's ServiceAccount, or `KUBECONFIG`.
 
 ```sh
 GITHUB_APP_CLIENT_ID=… GITHUB_APP_INSTALLATION_ID=… \

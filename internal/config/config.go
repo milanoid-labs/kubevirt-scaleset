@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/resource"
 )
@@ -33,6 +34,10 @@ type Config struct {
 	VMImage   string // containerDisk, pinned by digest
 	VMCores   uint32
 	VMMemory  resource.Quantity
+
+	// IdleTimeout: a runner VM that hasn't started a job this long after its creation is
+	// removed (stuck boot, failing image pull, or its job went to another runner).
+	IdleTimeout time.Duration
 }
 
 // FromEnv reads the configuration and reports every problem at once.
@@ -84,6 +89,9 @@ func FromEnv() (Config, error) {
 	c.VMCores = uint32(cores)
 	if c.VMMemory, err = resource.ParseQuantity(env("VM_MEMORY", "4Gi")); err != nil {
 		errs = append(errs, fmt.Errorf("VM_MEMORY: %w", err))
+	}
+	if c.IdleTimeout, err = time.ParseDuration(env("RUNNER_IDLE_TIMEOUT", "15m")); err != nil || c.IdleTimeout <= 0 {
+		errs = append(errs, fmt.Errorf("RUNNER_IDLE_TIMEOUT must be a positive duration like 15m: %v", err))
 	}
 
 	return c, errors.Join(errs...)

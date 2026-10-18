@@ -3,9 +3,8 @@
 Boots one runner VM from the published image without the scaler, to test the image and its
 boot contract (../../vm-image/README.md). The `VM smoke` workflow then runs a job on it.
 
-Run from the repo
-root with an admin kubeconfig, right before booting (an unused JIT config is a registered,
-offline runner). `IMAGE` is the reference from the vm-image run summary.
+Run from the repo root with an admin kubeconfig, right before booting (an unused JIT config
+is a registered, offline runner). `IMAGE` is the reference from the vm-image run summary.
 
 ```sh
 IMAGE=192.168.1.204:8081/docker-hosted/homelab-runner-vm:<tag>@sha256:<digest>

@@ -6,3 +6,6 @@
 vm-image/work/
 vm-image/out/
 vm-image/containerdisk/disk.qcow2
+
+# go build output
+/scaler

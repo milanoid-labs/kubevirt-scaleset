@@ -62,6 +62,11 @@ VM-specific:
 
 The Kubernetes client uses the pod's ServiceAccount, or `KUBECONFIG`.
 
+The image `ghcr.io/milanoid-labs/kubevirt-scaleset:<date>-<sha>` (linux/amd64, distroless,
+user 65532) is built by [`.github/workflows/scaler.yaml`](.github/workflows/scaler.yaml):
+PRs run the tests and build it, `main` also pushes it; the run summary shows the digest.
+Locally:
+
 ```sh
 GITHUB_APP_CLIENT_ID=… GITHUB_APP_INSTALLATION_ID=… \
 GITHUB_APP_PRIVATE_KEY_FILE=~/.config/kubevirt-scaleset/github-app.pem go run ./cmd/scaler

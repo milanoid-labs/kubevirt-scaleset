@@ -66,6 +66,7 @@ func (s Spec) Secret(name, jitConfig string) *corev1.Secret {
 func (s Spec) VMI(name string) *kubevirtv1.VirtualMachineInstance {
 	evictionNone := kubevirtv1.EvictionStrategyNone
 	grace := int64(30)
+	secureBootOff := false
 	return &kubevirtv1.VirtualMachineInstance{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: s.Namespace, Labels: s.labels()},
 		Spec: kubevirtv1.VirtualMachineInstanceSpec{
@@ -77,6 +78,10 @@ func (s Spec) VMI(name string) *kubevirtv1.VirtualMachineInstance {
 			EvictionStrategy:              &evictionNone, // a job VM is never migrated; it just ends
 			TerminationGracePeriodSeconds: &grace,
 			Domain: kubevirtv1.DomainSpec{
+				// UEFI finds /boot by filesystem UUID; Secure Boot would also need SMM.
+				Firmware: &kubevirtv1.Firmware{Bootloader: &kubevirtv1.Bootloader{
+					EFI: &kubevirtv1.EFI{SecureBoot: &secureBootOff},
+				}},
 				CPU:    &kubevirtv1.CPU{Cores: s.CPUCores},
 				Memory: &kubevirtv1.Memory{Guest: &s.Memory},
 				Devices: kubevirtv1.Devices{

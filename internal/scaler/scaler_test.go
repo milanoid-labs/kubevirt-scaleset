@@ -92,6 +92,9 @@ func TestScaleUpCreatesVMIAndOwnedSecret(t *testing.T) {
 	if v.Name != jit.names[0] || !strings.HasPrefix(v.Name, "homelab-runners-vm-") {
 		t.Errorf("VMI %q, runner %q: want the same name with the scale set prefix", v.Name, jit.names[0])
 	}
+	if fw := v.Spec.Domain.Firmware; fw == nil || fw.Bootloader.EFI == nil || *fw.Bootloader.EFI.SecureBoot {
+		t.Errorf("firmware = %+v, want UEFI without Secure Boot", fw)
+	}
 	if v.Spec.Volumes[0].ContainerDisk.Image != "registry/vm@sha256:abc" {
 		t.Errorf("image = %q", v.Spec.Volumes[0].ContainerDisk.Image)
 	}

@@ -216,6 +216,19 @@ func TestRejectedVMIRollsBack(t *testing.T) {
 	}
 }
 
+func TestRejectedVMIKeepsSecretWhenRunnerRemovalFails(t *testing.T) {
+	// The Secret is the only record of the runner ID: it stays for the reaper to retry.
+	s, gh := newScaler(t)
+	gh.busy = map[int64]error{100: context.DeadlineExceeded}
+	failVMICreate(s, apierrors.NewInvalid(schema.GroupKind{Group: "kubevirt.io", Kind: "VirtualMachineInstance"}, "x", nil))
+
+	s.HandleDesiredRunnerCount(context.Background(), 1)
+	secrets := listSecrets(t, s)
+	if len(secrets) != 1 || secrets[0].Annotations[vm.RunnerIDAnnotation] != "100" {
+		t.Errorf("secrets %+v, want the Secret with runner ID 100 kept", secrets)
+	}
+}
+
 func TestUncertainVMICreateLeavesItToTheReaper(t *testing.T) {
 	// A timeout: the VMI may exist after all, so its Secret and runner must stay.
 	s, gh := newScaler(t)

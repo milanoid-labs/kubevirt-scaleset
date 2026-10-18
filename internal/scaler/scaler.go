@@ -151,11 +151,12 @@ func (s *Scaler) createRunner(ctx context.Context) (string, error) {
 		// Roll back only if the API server surely refused the VMI. After a timeout or a
 		// dropped connection it may exist anyway; the reaper settles that from the
 		// ownerless Secret (adopts it, or unregisters the runner and deletes it).
-		if rejected(err) {
+		// Unregister first: if that fails, the Secret stays as the record of the runner
+		// ID, and the reaper retries.
+		if rejected(err) && s.removeUnusedRunner(ctx, name, jit.Runner) {
 			if derr := s.Kube.Delete(ctx, secret); derr != nil {
 				s.Log.Warn("deleting unused secret", "name", secret.Name, "error", derr)
 			}
-			s.removeUnusedRunner(ctx, name, jit.Runner)
 		}
 		return "", fmt.Errorf("create VMI %s: %w", name, err)
 	}
@@ -181,14 +182,16 @@ func (s *Scaler) owned() []client.ListOption {
 }
 
 // removeUnusedRunner unregisters a JIT runner whose VM was never created, so it doesn't
-// linger as an offline runner in GitHub.
-func (s *Scaler) removeUnusedRunner(ctx context.Context, name string, r *scaleset.RunnerReference) {
+// linger as an offline runner in GitHub. It reports whether the runner is gone.
+func (s *Scaler) removeUnusedRunner(ctx context.Context, name string, r *scaleset.RunnerReference) bool {
 	if r == nil {
-		return
+		return true
 	}
 	if err := s.GitHub.RemoveRunner(ctx, int64(r.ID)); err != nil && !errors.Is(err, scaleset.RunnerNotFoundError) {
 		s.Log.Warn("removing unused runner", "name", name, "error", err)
+		return false
 	}
+	return true
 }
 
 // rejected tells a definite refusal by the API server from an unknown outcome (timeout,

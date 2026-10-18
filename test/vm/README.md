@@ -9,7 +9,7 @@ is a registered, offline runner). `IMAGE` is the reference from the vm-image run
 ```sh
 IMAGE=192.168.1.204:8081/docker-hosted/homelab-runner-vm:<tag>@sha256:<digest>
 JIT_CONFIG=$(gh api -X POST orgs/milanoid-labs/actions/runners/generate-jitconfig \
-  -f name=vm-test-1 -F runner_group_id=1 -f 'labels[]=homelab-vm-test' -f work_folder=_work \
+  -f name=vm-test-1 -F runner_group_id=1 -f 'labels[]=homelab-runners-vm-test' -f work_folder=_work \
   -q .encoded_jit_config)
 
 kubectl create namespace vm-test
@@ -19,7 +19,7 @@ sed "s|IMAGE|$IMAGE|" test/vm/vmi.yaml | kubectl apply -f -
 unset JIT_CONFIG
 ```
 
-Watch it, then run `VM smoke` (Actions tab, `runs-on: homelab-vm-test`):
+Watch it, then run `VM smoke` (Actions tab, `runs-on: homelab-runners-vm-test`):
 
 ```sh
 kubectl -n vm-test get vmi -w        # Scheduling -> Running -> Succeeded after the job

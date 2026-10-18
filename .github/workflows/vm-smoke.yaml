@@ -1,15 +1,15 @@
 name: VM smoke
 
 # Checks that a runner VM is a usable CI machine. Manual only: pick the runner label.
-# homelab-vm-test is the hand-made VM from vm-image/test/; homelab-vm is the scaler's scale set.
+# homelab-runners-vm-test is the hand-made VM from vm-image/test/; homelab-runners-vm is the scaler's scale set.
 on:
   workflow_dispatch:
     inputs:
       runs-on:
         description: Runner label
-        default: homelab-vm-test
+        default: homelab-runners-vm-test
         type: choice
-        options: [homelab-vm-test, homelab-vm]
+        options: [homelab-runners-vm-test, homelab-runners-vm]
 
 permissions:
   contents: read

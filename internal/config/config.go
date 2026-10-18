@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 type Config struct {
@@ -25,6 +27,12 @@ type Config struct {
 
 	MinRunners int
 	MaxRunners int
+
+	// Namespace holds the runner VMIs and their Secrets.
+	Namespace string
+	VMImage   string // containerDisk, pinned by digest
+	VMCores   uint32
+	VMMemory  resource.Quantity
 }
 
 // FromEnv reads the configuration and reports every problem at once.
@@ -35,6 +43,8 @@ func FromEnv() (Config, error) {
 		GitHubConfigURL: env("GITHUB_CONFIG_URL", "https://github.com/milanoid-labs"),
 		ScaleSetName:    env("SCALE_SET_NAME", "homelab-runners-vm"),
 		RunnerGroup:     env("RUNNER_GROUP", "default"),
+		Namespace:       env("NAMESPACE", "kubevirt-runners"),
+		VMImage:         os.Getenv("VM_IMAGE"),
 		AppClientID:     os.Getenv("GITHUB_APP_CLIENT_ID"),
 	}
 	if c.AppClientID == "" {
@@ -62,6 +72,18 @@ func FromEnv() (Config, error) {
 	}
 	if c.MinRunners < 0 || c.MaxRunners < 1 || c.MinRunners > c.MaxRunners {
 		errs = append(errs, fmt.Errorf("need 0 <= MIN_RUNNERS (%d) <= MAX_RUNNERS (%d), MAX_RUNNERS >= 1", c.MinRunners, c.MaxRunners))
+	}
+
+	if c.VMImage == "" {
+		errs = append(errs, errors.New("VM_IMAGE is required"))
+	}
+	cores, err := intEnv("VM_CPU_CORES", 2)
+	if err != nil || cores < 1 {
+		errs = append(errs, fmt.Errorf("VM_CPU_CORES must be a positive number: %v", err))
+	}
+	c.VMCores = uint32(cores)
+	if c.VMMemory, err = resource.ParseQuantity(env("VM_MEMORY", "4Gi")); err != nil {
+		errs = append(errs, fmt.Errorf("VM_MEMORY: %w", err))
 	}
 
 	return c, errors.Join(errs...)

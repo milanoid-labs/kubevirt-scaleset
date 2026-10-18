@@ -22,10 +22,16 @@ Configured by environment variables (defaults in [`internal/config`](internal/co
 | `GITHUB_APP_INSTALLATION_ID` | required | |
 | `GITHUB_APP_PRIVATE_KEY_FILE` | required | path to the PEM (a mounted Secret), never the key itself |
 | `MIN_RUNNERS`, `MAX_RUNNERS` | `0`, `2` | |
+| `NAMESPACE` | `kubevirt-runners` | where the runner VMIs and their Secrets live |
+| `VM_IMAGE` | required | the containerDisk, pinned by digest |
+| `VM_CPU_CORES`, `VM_MEMORY` | `2`, `4Gi` | per runner VM |
 | `LOG_LEVEL` | `info` | JSON logs |
 
 The scale set is looked up by name and created if missing, never deleted: restarts keep its
-ID and the queued jobs.
+ID and the queued jobs. For every assigned job (up to `MAX_RUNNERS`) the scaler registers a
+JIT runner and creates a cloud-init Secret plus a VirtualMachineInstance of the same name;
+the VMI owns the Secret. The VMIs in the namespace are the state, so a restart neither loses
+nor duplicates VMs. The Kubernetes client uses the pod's ServiceAccount, or `KUBECONFIG`.
 
 ```sh
 GITHUB_APP_CLIENT_ID=… GITHUB_APP_INSTALLATION_ID=… \

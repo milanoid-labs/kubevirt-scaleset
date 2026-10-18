@@ -18,13 +18,15 @@ overlay), runs exactly one job and powers off. Nothing survives between jobs.
 | actions/runner | `RUNNER_VERSION` | `versions.env` (+ SHA-256) |
 | gh | `GH_VERSION` | `versions.env` (+ SHA-256) |
 | Docker CE + CLI, buildx, compose, containerd | latest from download.docker.com at build time | recorded in `/etc/homelab-runner-vm/versions.txt` and the image label `io.homelab.runner-vm.versions` |
-| git, curl, jq, unzip, zip, dirmngr, qemu-guest-agent | Ubuntu archive at build time | same |
+| git, jq, unzip, zip, dirmngr, gnupg, qemu-guest-agent | Ubuntu archive at build time | same |
 
 Keep `RUNNER_VERSION` and `GH_VERSION` equal to homelab-cluster's `runner/Dockerfile`, so a
 workflow behaves the same on `homelab-runners` (pods) and `homelab-vm` (VMs).
 
 User `runner` (uid from `useradd`) is in `docker` and `sudo`, with passwordless sudo, like
-the pod runners and GitHub-hosted runners. The runner lives in `/opt/actions-runner`.
+the pod runners and GitHub-hosted runners. The runner lives in `/opt/actions-runner`; its
+`.env` sets `ImageOS=ubuntu24` for every job, as the upstream runner image does (some
+`setup-*` actions need it). `dirmngr` is there for sonarqube-scan-action's GPG check.
 
 ## Boot contract
 
@@ -53,11 +55,7 @@ user-data never starts the runner, and the scaler's boot timeout reaps it.
 CI (`.github/workflows/vm-image.yaml`) runs on `homelab-runners`: PRs build only, `main`
 builds and pushes with the Nexus user `ci-push` (repo secret `NEXUS_PUSH_PASSWORD`,
 variables `NEXUS_PUSH_USERNAME`, `NEXUS_REGISTRY`). The pods have no `/dev/kvm`, so
-libguestfs emulates and a build takes a while.
-
-`build.sh` first probes the network of libguestfs' helper VM (~3 min). If it has no IP or
-DNS, the build stops there and the `build disk` log shows what the helper VM saw (DHCP,
-`resolv.conf`), instead of apt failing after the ~15 min resize.
+libguestfs emulates and a build takes ~75 min.
 
 Locally, on Ubuntu 24.04:
 

@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
 # Builds the runner VM disk: the Ubuntu 24.04 cloud image plus the GitHub Actions runner,
 # Docker CE and gh, written to out/disk.qcow2 (sparse, compressed).
-#
-# Runs on homelab-runners (Ubuntu 24.04 runner container, passwordless sudo) and needs
-# guestfs-tools, linux-image-virtual, qemu-utils and isc-dhcp-client (see the workflow). There is no /dev/kvm in the pods, so
-# libguestfs runs its helper VM in software emulation (TCG): slow, but no special access.
-# The same script works on any Ubuntu machine with those packages (faster with KVM).
+# Needs guestfs-tools, linux-image-virtual, qemu-utils and isc-dhcp-client (see the workflow).
+# Without /dev/kvm (the homelab-runners pods) libguestfs emulates: slow, but it works.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -32,37 +29,19 @@ fetch "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/ac
 fetch "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.deb" \
   "$GH_SHA256" "$WORK/gh.deb"
 
-# libguestfs reads the host kernel from /boot (root-only on Ubuntu), hence sudo.
 export LIBGUESTFS_BACKEND=direct
 export LIBGUESTFS_MEMSIZE=2048   # helper VM RAM; the runner container's limit is 4Gi
-G="sudo -E"
+G="sudo -E"                      # libguestfs reads the kernel in /boot, root-only on Ubuntu
 
-# 0. Fail fast if the libguestfs helper VM gets no network. Under TCG everything is slow,
-#    and a broken network otherwise only shows up after the ~15 min resize, as apt's
-#    "Temporary failure resolving". Probe on a throwaway overlay of the base image, and on
-#    failure print what the helper VM saw (DHCP, resolv.conf) from libguestfs' verbose log.
-rm -f "$WORK/probe.qcow2"
-qemu-img create -q -f qcow2 -b "$WORK/base.img" -F qcow2 "$WORK/probe.qcow2"
-if ! $G virt-customize -v -x -a "$WORK/probe.qcow2" --network \
-    --run-command 'ip -4 addr show; cat /etc/resolv.conf; getent hosts archive.ubuntu.com' \
-    >"$WORK/probe.log" 2>&1; then
-  echo "::error::libguestfs helper VM has no working network/DNS"
-  grep -aiE 'dhcp|resolv|nameserver|inet |getent|network|passt|slirp|timed? ?out' "$WORK/probe.log" | tail -60
-  exit 1
-fi
-echo "helper VM network OK:"
-grep -aE 'inet |nameserver|archive.ubuntu.com' "$WORK/probe.log" | grep -v '^libguestfs: trace' | tail -6
-rm -f "$WORK/probe.qcow2"
-
-# 1. Grow the image: the cloud image's root filesystem has <1 GB free, not enough for
-#    Docker + runner. virt-resize copies it into a DISK_SIZE disk and expands sda1 (root).
+# 1. The cloud image's root filesystem has <1 GB free: copy it into a DISK_SIZE disk.
 rm -f "$WORK/build.qcow2"
 qemu-img create -f qcow2 "$WORK/build.qcow2" "$DISK_SIZE"
 $G virt-resize --expand /dev/sda1 "$WORK/base.img" "$WORK/build.qcow2"
 
-# 2. Install everything inside the image (--network: the helper VM gets user-mode NAT).
+# 2. Install everything. dirmngr: sonarqube-scan-action verifies its scanner with GPG.
+#    .env: environment for every job; ImageOS is what setup-* actions use to pick builds.
 $G virt-customize -a "$WORK/build.qcow2" --network --smp 2 \
-  --install qemu-guest-agent,git,curl,jq,unzip,zip,dirmngr,gnupg,ca-certificates \
+  --install qemu-guest-agent,git,jq,unzip,zip,dirmngr,gnupg \
   --run-command 'install -m 0755 -d /etc/apt/keyrings
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
     echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable" \
@@ -77,6 +56,8 @@ $G virt-customize -a "$WORK/build.qcow2" --network --smp 2 \
 ' \
   --chmod '0440:/etc/sudoers.d/runner' \
   --mkdir /opt/actions-runner \
+  --write '/opt/actions-runner/.env:ImageOS=ubuntu24
+' \
   --copy-in "$WORK/runner.tar.gz:/tmp" \
   --run-command 'tar -xzf /tmp/runner.tar.gz -C /opt/actions-runner && rm /tmp/runner.tar.gz
     /opt/actions-runner/bin/installdependencies.sh
@@ -87,19 +68,15 @@ $G virt-customize -a "$WORK/build.qcow2" --network --smp 2 \
   --mkdir /etc/homelab-runner-vm \
   --run-command "{ echo ubuntu-cloud-image ${UBUNTU_RELEASE}; echo actions-runner ${RUNNER_VERSION}; echo gh ${GH_VERSION};
     dpkg-query -W -f '\${Package} \${Version}\n' docker-ce docker-ce-cli containerd.io docker-buildx-plugin \
-      docker-compose-plugin git curl jq unzip zip dirmngr gnupg ca-certificates qemu-guest-agent;
+      docker-compose-plugin git jq unzip zip dirmngr gnupg qemu-guest-agent;
     } > /etc/homelab-runner-vm/versions.txt" \
   --run-command 'apt-get clean && rm -rf /var/lib/apt/lists/*' \
-  --run-command 'rm -f /etc/ssh/ssh_host_*' \
-  --run-command 'cloud-init clean --logs --machine-id'
+  --run-command 'cloud-init clean --logs --machine-id'   # first boot of each VM = new instance
 
-# What went in, for the image labels and the job summary.
 $G virt-cat -a "$WORK/build.qcow2" /etc/homelab-runner-vm/versions.txt | tee "$OUT/versions.txt"
 
-# 3. Drop unused blocks, then compress: roughly 1-1.3 GB instead of several GB.
-#    --in-place only fstrims inside the image. virt-sparsify's copy mode would need a
-#    scratch overlay as large as the virtual disk (20G) and, when it thinks space is short,
-#    stops at an interactive "Press RETURN" prompt that fails in CI (End_of_file).
+# 3. Trim unused blocks, then compress (~1 GB). virt-sparsify's copy mode needs 20G scratch
+#    space and prompts interactively when short, so trim in place and convert with qemu-img.
 $G virt-sparsify --in-place "$WORK/build.qcow2"
 $G qemu-img convert -c -O qcow2 "$WORK/build.qcow2" "$OUT/disk.qcow2"
 $G chown "$(id -u):$(id -g)" "$OUT/disk.qcow2"

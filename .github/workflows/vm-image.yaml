@@ -28,20 +28,16 @@ env:
 
 jobs:
   build:
-    # On the LAN: the only runners that reach Nexus (192.168.1.204:8081). No /dev/kvm in the
-    # pods, so libguestfs emulates (TCG); the build is slow but needs no special access.
+    # On the LAN, so it reaches Nexus. No /dev/kvm in the pods: libguestfs emulates (~75 min).
     runs-on: homelab-runners
     timeout-minutes: 150
     steps:
       - name: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      # In the runner container itself (4Gi limit), not via dind (1Gi): libguestfs' helper
-      # VM alone takes 2Gi. linux-image-virtual is the kernel libguestfs boots.
-      # isc-dhcp-client: supermin builds the helper VM only from the packages listed in
-      # libguestfs' supermin.d/packages, which names isc-dhcp-client. apt satisfies the
-      # "dhcpcd-base | isc-dhcp-client" dependency with dhcpcd-base, which isn't on that
-      # list, so without this the helper VM has no DHCP client: no IP, no DNS, no apt.
+      # Runs in the runner container (4Gi), not dind (1Gi): the helper VM alone takes 2Gi.
+      # linux-image-virtual: the kernel libguestfs boots. isc-dhcp-client: the DHCP client
+      # libguestfs' helper VM is built with (apt would pick dhcpcd-base, which it ignores).
       - name: install build tools
         run: |
           sudo apt-get update
@@ -51,7 +47,7 @@ jobs:
       - name: build disk
         run: vm-image/build.sh
 
-      # dind is fine here: it only packs an existing file into an image.
+      # dind is fine here: it only packs the disk file into an image.
       - name: build containerDisk
         run: |
           cp vm-image/out/disk.qcow2 vm-image/containerdisk/
@@ -63,8 +59,7 @@ jobs:
           docker save homelab-runner-vm:ci -o vm-image/out/image.tar
           ls -lh vm-image/out/
 
-      # crane, not docker push: the dind daemon only does HTTPS, and Nexus is plain HTTP.
-      # --insecure is per command, so no daemon config has to change.
+      # crane, not docker push: dind only does HTTPS, Nexus is plain HTTP (--insecure).
       - name: install crane
         if: github.event_name != 'pull_request'
         run: |
@@ -80,8 +75,7 @@ jobs:
           USERNAME: ${{ vars.NEXUS_PUSH_USERNAME }}
           PASSWORD: ${{ secrets.NEXUS_PUSH_PASSWORD }}
         run: |
-          # docker-hosted is ALLOW_ONCE, so every build needs a new tag. Date + commit alone
-          # collides on a re-run or a second dispatch the same day, so add run number + attempt.
+          # docker-hosted is ALLOW_ONCE: run number + attempt keep re-runs from colliding.
           image="${REGISTRY}/docker-hosted/homelab-runner-vm"
           tag="$(date -u +%Y%m%d)-${GITHUB_SHA::7}-${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
           echo "$PASSWORD" | crane auth login "$REGISTRY" -u "$USERNAME" --password-stdin

@@ -44,9 +44,20 @@ func (s *Scaler) RunReaper(ctx context.Context, interval time.Duration) {
 func (s *Scaler) Reap(ctx context.Context) {
 	var vmis kubevirtv1.VirtualMachineInstanceList
 	if err := s.Kube.List(ctx, &vmis, s.owned()...); err != nil {
+		s.Metrics.Error("reap")
 		s.Log.Error("reaper: listing runner VMs", "error", err)
 		return
 	}
+	phases := map[string]int{}
+	for _, v := range vmis.Items {
+		phase := string(v.Status.Phase)
+		if phase == "" {
+			phase = string(kubevirtv1.Pending) // just created, KubeVirt hasn't set one yet
+		}
+		phases[phase]++
+	}
+	s.Metrics.SetVMs(phases)
+
 	for i := range vmis.Items {
 		v := &vmis.Items[i]
 		if v.DeletionTimestamp != nil {
@@ -68,14 +79,17 @@ func (s *Scaler) reapVMI(ctx context.Context, v *kubevirtv1.VirtualMachineInstan
 		if errors.Is(err, scaleset.JobStillRunningError) {
 			log.Debug("runner is running a job, keeping its VM")
 		} else {
+			s.Metrics.Error("reap")
 			log.Error("reaper: removing runner registration", "error", err)
 		}
 		return
 	}
 	if err := s.Kube.Delete(ctx, v); client.IgnoreNotFound(err) != nil {
+		s.Metrics.Error("reap")
 		log.Error("reaper: deleting runner VM", "error", err)
 		return
 	}
+	s.Metrics.VMReaped(reason)
 	log.Info("deleted runner VM")
 }
 

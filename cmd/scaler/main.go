@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -20,6 +22,7 @@ import (
 
 	"github.com/milanoid-labs/kubevirt-scaleset/internal/config"
 	"github.com/milanoid-labs/kubevirt-scaleset/internal/github"
+	"github.com/milanoid-labs/kubevirt-scaleset/internal/metrics"
 	"github.com/milanoid-labs/kubevirt-scaleset/internal/scaler"
 	"github.com/milanoid-labs/kubevirt-scaleset/internal/vm"
 )
@@ -62,6 +65,12 @@ func run(log *slog.Logger) error {
 
 	log.Info("scale set ready", "id", scaleSet.ID)
 
+	// Metrics first: the listener records into it from its first message.
+	rec := metrics.New(cfg.ScaleSetName, cfg.MinRunners, cfg.MaxRunners)
+	if err := serveMetrics(ctx, cfg.MetricsAddr, rec, log); err != nil {
+		return fmt.Errorf("metrics server: %w", err)
+	}
+
 	// Kubernetes client: in the pod from its ServiceAccount, locally from KUBECONFIG.
 	kube, err := newKubeClient()
 	if err != nil {
@@ -81,7 +90,7 @@ func run(log *slog.Logger) error {
 		ScaleSetID: scaleSet.ID,
 		MaxRunners: cfg.MaxRunners,
 		Logger:     log.WithGroup("listener"),
-	})
+	}, listener.WithMetricsRecorder(rec))
 	if err != nil {
 		return fmt.Errorf("listener: %w", err)
 	}
@@ -100,6 +109,7 @@ func run(log *slog.Logger) error {
 		MinRunners:  cfg.MinRunners,
 		MaxRunners:  cfg.MaxRunners,
 		IdleTimeout: cfg.IdleTimeout,
+		Metrics:     rec,
 		Log:         log.WithGroup("scaler"),
 	}
 
@@ -111,6 +121,31 @@ func run(log *slog.Logger) error {
 		return fmt.Errorf("listener: %w", err)
 	}
 	log.Info("stopped")
+	return nil
+}
+
+// serveMetrics serves /metrics and /healthz until ctx ends. The port is bound here, so a
+// taken port fails startup instead of a background goroutine.
+func serveMetrics(ctx context.Context, addr string, rec *metrics.Recorder, log *slog.Logger) error {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", rec.Handler())
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok\n")) })
+
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	go func() {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("metrics server", "error", err)
+		}
+	}()
+	go func() {
+		<-ctx.Done()
+		srv.Shutdown(context.WithoutCancel(ctx))
+	}()
+	log.Info("serving metrics", "addr", ln.Addr().String())
 	return nil
 }
 

@@ -2,6 +2,7 @@ package scaler
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -144,5 +145,25 @@ func TestReapKeepsOrphanSecretWhenRunnerRemovalFails(t *testing.T) {
 	s.Reap(context.Background())
 	if !exists(t, s, &corev1.Secret{}, "orphan-userdata") {
 		t.Error("secret deleted although its runner is still registered")
+	}
+}
+
+func TestReapRecordsPhasesAndReasons(t *testing.T) {
+	s, _ := newScaler(t,
+		agedVMI("done", "1", kubevirtv1.Succeeded, time.Minute),
+		agedVMI("idle", "2", kubevirtv1.Running, time.Hour),
+		agedVMI("working", "3", kubevirtv1.Running, time.Minute),
+	)
+	s.Reap(context.Background())
+	out := scrapeScaler(t, s)
+	for _, want := range []string{
+		`kubevirt_scaleset_vms{name="homelab-runners-vm",phase="Running"} 2`,
+		`kubevirt_scaleset_vms{name="homelab-runners-vm",phase="Succeeded"} 1`,
+		`kubevirt_scaleset_reaped_vms_total{name="homelab-runners-vm",reason="finished"} 1`,
+		`kubevirt_scaleset_reaped_vms_total{name="homelab-runners-vm",reason="idle"} 1`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %s", want)
+		}
 	}
 }

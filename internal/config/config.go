@@ -39,6 +39,9 @@ type Config struct {
 	// IdleTimeout: a runner VM that hasn't started a job this long after its creation is
 	// removed (stuck boot, failing image pull, or its job went to another runner).
 	IdleTimeout time.Duration
+
+	// MetricsAddr serves /metrics and /healthz.
+	MetricsAddr string
 }
 
 // FromEnv reads the configuration and reports every problem at once.
@@ -52,6 +55,7 @@ func FromEnv() (Config, error) {
 		Namespace:       env("NAMESPACE", "kubevirt-runners"),
 		VMImage:         os.Getenv("VM_IMAGE"),
 		AppClientID:     os.Getenv("GITHUB_APP_CLIENT_ID"),
+		MetricsAddr:     env("METRICS_ADDR", ":8080"),
 	}
 	if c.AppClientID == "" {
 		errs = append(errs, errors.New("GITHUB_APP_CLIENT_ID is required"))

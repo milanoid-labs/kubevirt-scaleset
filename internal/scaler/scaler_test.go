@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
+	"github.com/milanoid-labs/kubevirt-scaleset/internal/metrics"
 	"github.com/milanoid-labs/kubevirt-scaleset/internal/vm"
 )
 
@@ -74,6 +76,7 @@ func newScaler(t *testing.T, objs ...client.Object) (*Scaler, *fakeGitHub) {
 		MinRunners:  0,
 		MaxRunners:  2,
 		IdleTimeout: 15 * time.Minute,
+		Metrics:     metrics.New("homelab-runners-vm", 0, 2),
 		Log:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}, jit
 }
@@ -224,5 +227,27 @@ func TestUncertainVMICreateLeavesItToTheReaper(t *testing.T) {
 	}
 	if len(gh.removed) != 0 {
 		t.Errorf("removed runners %v, want none", gh.removed)
+	}
+}
+
+func scrapeScaler(t *testing.T, s *Scaler) string {
+	t.Helper()
+	w := httptest.NewRecorder()
+	s.Metrics.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/metrics", nil))
+	return w.Body.String()
+}
+
+func TestJobStartedRecordsVMBootTime(t *testing.T) {
+	created := time.Now().Add(-time.Minute).Truncate(time.Second)
+	v := existingVMI("homelab-runners-vm-abc", kubevirtv1.Running)
+	v.CreationTimestamp = metav1.NewTime(created)
+	s, _ := newScaler(t, v)
+
+	s.HandleJobStarted(context.Background(), &scaleset.JobStarted{
+		RunnerName:     "homelab-runners-vm-abc",
+		JobMessageBase: scaleset.JobMessageBase{RunnerAssignTime: created.Add(51 * time.Second)},
+	})
+	if out := scrapeScaler(t, s); !strings.Contains(out, `kubevirt_scaleset_vm_boot_duration_seconds_sum{name="homelab-runners-vm"} 51`) {
+		t.Errorf("boot time not recorded:\n%s", out)
 	}
 }

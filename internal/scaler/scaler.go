@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
+	"github.com/milanoid-labs/kubevirt-scaleset/internal/metrics"
 	"github.com/milanoid-labs/kubevirt-scaleset/internal/vm"
 )
 
@@ -38,6 +39,7 @@ type Scaler struct {
 	// IdleTimeout is how long a VM may exist without running a job (boot included)
 	// before the reaper removes it.
 	IdleTimeout time.Duration
+	Metrics     *metrics.Recorder
 	Log         *slog.Logger
 }
 
@@ -52,6 +54,7 @@ var _ listener.Scaler = (*Scaler)(nil)
 func (s *Scaler) HandleDesiredRunnerCount(ctx context.Context, assigned int) (int, error) {
 	current, err := s.countActive(ctx)
 	if err != nil {
+		s.Metrics.Error("list_vms")
 		s.Log.Error("listing runner VMs", "error", err)
 		return 0, nil
 	}
@@ -64,6 +67,7 @@ func (s *Scaler) HandleDesiredRunnerCount(ctx context.Context, assigned int) (in
 	for range desired - current {
 		name, err := s.createRunner(ctx)
 		if err != nil {
+			s.Metrics.Error("create_runner")
 			s.Log.Error("creating runner VM", "error", err)
 			break
 		}
@@ -73,9 +77,20 @@ func (s *Scaler) HandleDesiredRunnerCount(ctx context.Context, assigned int) (in
 	return current, nil
 }
 
-func (s *Scaler) HandleJobStarted(_ context.Context, job *scaleset.JobStarted) error {
+// HandleJobStarted logs and records the VM's boot time: runner name = VMI name, and an
+// ephemeral runner's first job is its only one.
+func (s *Scaler) HandleJobStarted(ctx context.Context, job *scaleset.JobStarted) error {
 	s.Log.Info("job started", "runner", job.RunnerName, "repository", job.RepositoryName,
 		"job", job.JobDisplayName, "workflowRunID", job.WorkflowRunID)
+
+	var vmi kubevirtv1.VirtualMachineInstance
+	err := s.Kube.Get(ctx, client.ObjectKey{Namespace: s.VM.Namespace, Name: job.RunnerName}, &vmi)
+	switch {
+	case err != nil:
+		s.Log.Debug("no VM for the boot time", "runner", job.RunnerName, "error", err)
+	case !job.RunnerAssignTime.IsZero() && job.RunnerAssignTime.After(vmi.CreationTimestamp.Time):
+		s.Metrics.VMBooted(job.RunnerAssignTime.Sub(vmi.CreationTimestamp.Time))
+	}
 	return nil
 }
 

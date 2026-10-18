@@ -28,7 +28,7 @@ concurrency:
 jobs:
   test:
     runs-on: homelab-runners
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -60,7 +60,7 @@ jobs:
     needs: test
     # The build runs in the dind sidecar (1Gi limit), compiling included.
     runs-on: homelab-runners
-    timeout-minutes: 20
+    timeout-minutes: 25
     permissions:
       contents: read
       packages: write

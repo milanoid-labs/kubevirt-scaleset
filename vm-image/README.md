@@ -56,10 +56,13 @@ user-data never starts the runner, and the scaler's boot timeout reaps it.
 
 ## Build
 
-CI (`.github/workflows/vm-image.yaml`) runs on `homelab-runners`: PRs build only, `main`
+CI (`.github/workflows/vm-image.yaml`) runs on `homelab-runners-kvm`: PRs build only, `main`
 builds and pushes with the Nexus user `ci-push` (repo secret `NEXUS_PUSH_PASSWORD`,
-variables `NEXUS_PUSH_USERNAME`, `NEXUS_REGISTRY`). The pods have no `/dev/kvm`, so
-libguestfs emulates and a build takes about an hour.
+variables `NEXUS_PUSH_USERNAME`, `NEXUS_REGISTRY`). That scale set is a single runner pod on
+`kubevirt01` that requests `devices.kubevirt.io/kvm`, so libguestfs' helper VM gets
+`/dev/kvm` and a build takes ~10-15 min (on the plain `homelab-runners` pods it falls back
+to TCG emulation: ~75 min). The pod runs at a priority below the runner VMs, which can
+preempt it: a build that fails that way just needs a re-run.
 
 Locally, on Ubuntu 24.04:
 

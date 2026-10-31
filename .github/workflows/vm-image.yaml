@@ -28,14 +28,22 @@ env:
 
 jobs:
   build:
-    # On the LAN, so it reaches Nexus. No /dev/kvm in the pods: libguestfs emulates (~75 min).
-    runs-on: homelab-runners
-    timeout-minutes: 150
+    # On the LAN, so it reaches Nexus. homelab-runners-kvm (homelab-cluster's
+    # arc-runners/release-kvm.yaml) is one pod on kubevirt01 with /dev/kvm, so libguestfs'
+    # helper VM runs under KVM (~10-15 min) instead of TCG emulation (~75 min).
+    runs-on: homelab-runners-kvm
+    timeout-minutes: 45
     steps:
+      # Fail fast rather than fall back to TCG, which would run into the timeout.
+      - name: check /dev/kvm
+        run: |
+          ls -l /dev/kvm
+          sudo sh -c ': <> /dev/kvm'
+
       - name: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      # Runs in the runner container (4Gi), not dind (1Gi): the helper VM alone takes 2Gi.
+      # Runs in the runner container (3Gi), not dind (1Gi): the helper VM alone takes 2Gi.
       # linux-image-virtual: the kernel libguestfs boots. isc-dhcp-client: the DHCP client
       # libguestfs' helper VM is built with (apt would pick dhcpcd-base, which it ignores).
       - name: install build tools

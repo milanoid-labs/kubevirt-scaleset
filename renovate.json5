@@ -1,0 +1,126 @@
+{
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+  // Run by homelab-cluster's Renovate CronJob (infrastructure/controllers/base/renovate),
+  // whose global config must allow the checksum script in allowedCommands.
+  extends: [
+    'config:best-practices',
+  ],
+  postUpdateOptions: [
+    'gomodTidy',
+  ],
+  customDatasources: {
+    // Ubuntu publishes each cloud image build as a dated directory (20261017/) next to
+    // current/; extractVersion below keeps only the dated ones.
+    'ubuntu-noble-cloud-image': {
+      defaultRegistryUrlTemplate: 'https://cloud-images.ubuntu.com/noble/',
+      format: 'html',
+    },
+  },
+  customManagers: [
+    {
+      customType: 'regex',
+      managerFilePatterns: [
+        '/^vm-image/versions\\.env$/',
+      ],
+      matchStrings: [
+        'UBUNTU_RELEASE=(?<currentValue>\\d{8})',
+      ],
+      depNameTemplate: 'ubuntu-cloud-image',
+      datasourceTemplate: 'custom.ubuntu-noble-cloud-image',
+      extractVersionTemplate: '^(?<version>\\d{8})/$',
+      versioningTemplate: 'regex:^(?<major>\\d{4})(?<minor>\\d{2})(?<patch>\\d{2})$',
+    },
+    {
+      // Release assets, not apt or images, so no built-in manager sees them. Tags are vX.Y.Z,
+      // versions.env holds the bare version, hence extractVersionTemplate.
+      customType: 'regex',
+      managerFilePatterns: [
+        '/^vm-image/versions\\.env$/',
+      ],
+      matchStrings: [
+        'RUNNER_VERSION=(?<currentValue>\\d+\\.\\d+\\.\\d+)',
+      ],
+      depNameTemplate: 'actions/runner',
+      datasourceTemplate: 'github-releases',
+      extractVersionTemplate: '^v(?<version>.*)$',
+    },
+    {
+      customType: 'regex',
+      managerFilePatterns: [
+        '/^vm-image/versions\\.env$/',
+      ],
+      matchStrings: [
+        'GH_VERSION=(?<currentValue>\\d+\\.\\d+\\.\\d+)',
+      ],
+      depNameTemplate: 'cli/cli',
+      datasourceTemplate: 'github-releases',
+      extractVersionTemplate: '^v(?<version>.*)$',
+    },
+    {
+      customType: 'regex',
+      managerFilePatterns: [
+        '/^\\.github/workflows/vm-image\\.yaml$/',
+      ],
+      matchStrings: [
+        'CRANE_VERSION: "(?<currentValue>\\d+\\.\\d+\\.\\d+)"',
+      ],
+      depNameTemplate: 'google/go-containerregistry',
+      datasourceTemplate: 'github-releases',
+      extractVersionTemplate: '^v(?<version>.*)$',
+    },
+  ],
+  packageRules: [
+    {
+      // The four pins above come with a SHA-256 that Renovate can't compute: the script
+      // downloads the new version and rewrites it, so the PR carries both.
+      matchManagers: [
+        'custom.regex',
+      ],
+      matchPackageNames: [
+        'ubuntu-cloud-image',
+        'actions/runner',
+        'cli/cli',
+        'google/go-containerregistry',
+      ],
+      postUpgradeTasks: {
+        commands: [
+          'vm-image/update-checksums.sh {{{depName}}}',
+        ],
+        fileFilters: [
+          'vm-image/versions.env',
+          '.github/workflows/vm-image.yaml',
+        ],
+        executionMode: 'update',
+      },
+      semanticCommitType: 'chore',
+      semanticCommitScope: 'vm-image',
+    },
+    {
+      // A release sometimes gets a quick follow-up patch; let it settle first.
+      matchDatasources: [
+        'github-releases',
+      ],
+      minimumReleaseAge: '3 days',
+    },
+    {
+      // The weekly rebuild (build.sh's --update) already brings Ubuntu's security updates,
+      // so a new base image (new kernel, mostly) once a month is enough. The listing has no
+      // dates, so there's nothing for minimumReleaseAge to check.
+      matchPackageNames: [
+        'ubuntu-cloud-image',
+      ],
+      schedule: [
+        '* * 1-7 * 1',
+      ],
+    },
+    {
+      matchPackageNames: [
+        'actions/runner',
+        'cli/cli',
+      ],
+      prBodyNotes: [
+        '⚠️ Bump homelab-cluster\'s `runner/Dockerfile` to the same version, so a workflow behaves the same on `homelab-runners` (pods) and `homelab-runners-vm` (VMs).',
+      ],
+    },
+  ],
+}

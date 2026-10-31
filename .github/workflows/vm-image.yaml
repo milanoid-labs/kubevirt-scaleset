@@ -1,7 +1,8 @@
 name: VM image
 
 # Builds the runner VM disk (vm-image/) and publishes it as a KubeVirt containerDisk to the
-# homelab Nexus. PRs build only (no secrets, nothing pushed); main builds and pushes.
+# homelab Nexus. PRs build only (no secrets, nothing pushed); main builds and pushes. The
+# weekly run rebuilds main unchanged, so Ubuntu, Docker and apt packages stay current.
 on:
   pull_request:
     branches: [main]
@@ -13,6 +14,8 @@ on:
     paths:
       - 'vm-image/**'
       - '.github/workflows/vm-image.yaml'
+  schedule:
+    - cron: '0 3 * * 1'   # Monday 03:00 UTC
   workflow_dispatch:
 
 permissions:
@@ -22,6 +25,7 @@ concurrency:
   group: vm-image-${{ github.ref }}
   cancel-in-progress: true
 
+# Renovate bumps CRANE_VERSION; vm-image/update-checksums.sh rewrites CRANE_SHA256.
 env:
   CRANE_VERSION: "0.22.1"
   CRANE_SHA256: 0ab7a1d6932a213aed964ce97666c3077fe691c8606413674a8b3e0b9ec4cda0

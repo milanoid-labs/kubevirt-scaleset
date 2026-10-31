@@ -2,7 +2,8 @@
 # Builds the runner VM disk: the Ubuntu 24.04 cloud image plus the GitHub Actions runner,
 # Docker CE and gh, written to out/disk.qcow2 (sparse, compressed).
 # Needs guestfs-tools, linux-image-virtual, qemu-utils and isc-dhcp-client (see the workflow).
-# Without /dev/kvm (the homelab-runners pods) libguestfs emulates: slow, but it works.
+# Uses /dev/kvm when it is there (CI: homelab-runners-kvm); without it libguestfs emulates
+# (TCG): ~75 min instead of ~10-15, but it works.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -30,7 +31,7 @@ fetch "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSI
   "$GH_SHA256" "$WORK/gh.deb"
 
 export LIBGUESTFS_BACKEND=direct
-export LIBGUESTFS_MEMSIZE=2048   # helper VM RAM; the runner container's limit is 4Gi
+export LIBGUESTFS_MEMSIZE=2048   # helper VM RAM; the runner container's limit is 3Gi
 G="sudo -E"                      # libguestfs reads the kernel in /boot, root-only on Ubuntu
 
 # 1. The cloud image's root filesystem has <1 GB free: grow the disk to DISK_SIZE, then

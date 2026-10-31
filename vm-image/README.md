@@ -19,6 +19,7 @@ overlay), runs exactly one job and powers off. Nothing survives between jobs.
 | gh | `GH_VERSION` | `versions.env` (+ SHA-256) |
 | Docker CE + CLI, buildx, compose, containerd | latest from download.docker.com at build time | recorded in `/etc/homelab-runner-vm/versions.txt` and the image label `io.homelab.runner-vm.versions` |
 | git, jq, unzip, zip, dirmngr, gnupg, qemu-guest-agent | Ubuntu archive at build time | same |
+| Everything else from the cloud image | upgraded at build time (`virt-customize --update`) | |
 
 Keep `RUNNER_VERSION` and `GH_VERSION` equal to homelab-cluster's `runner/Dockerfile`, so a
 workflow behaves the same on `homelab-runners` (pods) and `homelab-runners-vm` (VMs).
@@ -53,6 +54,23 @@ The unit then runs `run.sh --jitconfig …` as `runner` (the file reaches it via
 `LoadCredential`), and **powers the VM off when the runner exits**, however it ends. The
 VMI turns `Succeeded` and the scaler deletes it with its Secret. A VM booted without this
 user-data never starts the runner, and the scaler's boot timeout reaps it.
+
+## Updates
+
+- **Renovate** ([`renovate.json5`](../renovate.json5), run by homelab-cluster's Renovate
+  CronJob) bumps `UBUNTU_RELEASE` (monthly, from the `cloud-images.ubuntu.com/noble/`
+  listing), `RUNNER_VERSION`, `GH_VERSION` and the workflow's `CRANE_VERSION`. It can't
+  compute checksums, so it runs [`update-checksums.sh`](update-checksums.sh) on each bump,
+  which downloads the new version and rewrites its SHA-256 pin: the PR carries both.
+- **Every build** runs `apt-get upgrade` (`virt-customize --update`), so Ubuntu's security
+  updates land without a new base image; a new kernel ABI waits for the next `UBUNTU_RELEASE`.
+- **Weekly** (Monday 03:00 UTC) the workflow rebuilds and pushes `main` unchanged, which
+  refreshes Docker CE and the apt packages. Each run gets a new tag.
+
+A new image reaches the runners only when homelab-cluster's `VM_IMAGE` points at it.
+
+By hand: change the version in `versions.env` (or the workflow), then
+`vm-image/update-checksums.sh` (all pins) or `vm-image/update-checksums.sh cli/cli` (one).
 
 ## Build
 

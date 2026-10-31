@@ -41,10 +41,13 @@ rm -f "$WORK/build.qcow2"
 qemu-img convert -O qcow2 "$WORK/base.img" "$WORK/build.qcow2"
 qemu-img resize "$WORK/build.qcow2" "$DISK_SIZE"
 
-# 2. Install everything. dirmngr: sonarqube-scan-action verifies its scanner with GPG.
+# 2. Install everything. --update: Ubuntu's updates since the cloud image was built (apt-get
+#    upgrade, so a new kernel ABI is held back until Renovate bumps UBUNTU_RELEASE); after the
+#    growpart, it needs the space. dirmngr: sonarqube-scan-action verifies its scanner with GPG.
 #    .env: environment for every job; ImageOS is what setup-* actions use to pick builds.
 $G virt-customize -a "$WORK/build.qcow2" --network --smp 2 \
   --run-command 'growpart /dev/sda 1 && resize2fs /dev/sda1' \
+  --update \
   --install qemu-guest-agent,git,jq,unzip,zip,dirmngr,gnupg \
   --run-command 'install -m 0755 -d /etc/apt/keyrings
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc

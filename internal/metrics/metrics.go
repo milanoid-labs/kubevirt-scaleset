@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/actions/scaleset"
-	"github.com/actions/scaleset/listener"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -31,7 +30,8 @@ var (
 	completedJobLabels = append(jobLabels[:len(jobLabels):len(jobLabels)], "job_result")
 )
 
-// Recorder holds all metrics. It implements listener.MetricsRecorder for the gha_* ones.
+// Recorder holds all metrics. The scaler records the gha_* ones from the listener's
+// messages, as ARC's listener does.
 type Recorder struct {
 	reg *prometheus.Registry
 
@@ -44,8 +44,6 @@ type Recorder struct {
 	vms                                         *prometheus.GaugeVec
 	reapedVMs, errors                           *prometheus.CounterVec
 }
-
-var _ listener.MetricsRecorder = (*Recorder)(nil)
 
 // New registers the metrics of scale set name, with its fixed runner limits.
 func New(name string, minRunners, maxRunners int) *Recorder {

@@ -2,6 +2,7 @@ package scaler
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http/httptest"
@@ -51,6 +52,20 @@ func (f *fakeGitHub) RemoveRunner(_ context.Context, id int64) error {
 	return nil
 }
 
+// fakeSession acquires every job unless err is set.
+type fakeSession struct {
+	acquired []int64
+	err      error
+}
+
+func (f *fakeSession) AcquireJobs(_ context.Context, ids []int64) ([]int64, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.acquired = append(f.acquired, ids...)
+	return ids, nil
+}
+
 func newScaler(t *testing.T, objs ...client.Object) (*Scaler, *fakeGitHub) {
 	t.Helper()
 	scheme := runtime.NewScheme()
@@ -68,6 +83,7 @@ func newScaler(t *testing.T, objs ...client.Object) (*Scaler, *fakeGitHub) {
 			WithObjectTracker(clienttesting.NewObjectTracker(scheme, serializer.NewCodecFactory(scheme).UniversalDecoder())).
 			WithObjects(objs...).Build(),
 		GitHub:     jit,
+		Session:    &fakeSession{},
 		ScaleSetID: 3,
 		VM: vm.Spec{
 			Namespace: "runners", ScaleSet: "homelab-runners-vm",
@@ -262,5 +278,78 @@ func TestJobStartedRecordsVMBootTime(t *testing.T) {
 	})
 	if out := scrapeScaler(t, s); !strings.Contains(out, `kubevirt_scaleset_vm_boot_duration_seconds_sum{name="homelab-runners-vm"} 51`) {
 		t.Errorf("boot time not recorded:\n%s", out)
+	}
+}
+
+func TestScaleAcquiresJobsAndRecordsMetrics(t *testing.T) {
+	s, jit := newScaler(t)
+	t0 := time.Now().Truncate(time.Second)
+	err := s.Scale(context.Background(), &scaleset.RunnerScaleSetMessage{
+		MessageID:            1,
+		Statistics:           &scaleset.RunnerScaleSetStatistic{TotalAssignedJobs: 1},
+		JobAvailableMessages: []*scaleset.JobAvailable{{JobMessageBase: scaleset.JobMessageBase{RunnerRequestID: 7}}},
+		JobStartedMessages: []*scaleset.JobStarted{{JobMessageBase: scaleset.JobMessageBase{
+			ScaleSetAssignTime: t0, RunnerAssignTime: t0.Add(5 * time.Second),
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Session.(*fakeSession).acquired; len(got) != 1 || got[0] != 7 {
+		t.Errorf("acquired %v, want [7]", got)
+	}
+	if len(jit.names) != 1 {
+		t.Errorf("created %d runners, want 1", len(jit.names))
+	}
+	out := scrapeScaler(t, s)
+	for _, want := range []string{
+		`gha_assigned_jobs{name="homelab-runners-vm"} 1`,
+		`gha_desired_runners{name="homelab-runners-vm"} 1`,
+		`gha_started_jobs_total{`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %s in:\n%s", want, out)
+		}
+	}
+}
+
+func TestScaleEmptyPollReusesLastStatistics(t *testing.T) {
+	s, jit := newScaler(t)
+	if err := s.Scale(context.Background(), nil); err != nil || len(jit.names) != 0 {
+		t.Fatalf("before any statistics: err %v, created %d", err, len(jit.names))
+	}
+	s.Scale(context.Background(), &scaleset.RunnerScaleSetMessage{
+		MessageID: -1, Statistics: &scaleset.RunnerScaleSetStatistic{TotalAssignedJobs: 2},
+	})
+	// One VM fails to boot and finishes: the next empty poll replaces it.
+	vmis := listVMIs(t, s)
+	vmis[0].Status.Phase = kubevirtv1.Failed
+	if err := s.Kube.Update(context.Background(), &vmis[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Scale(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(jit.names) != 3 {
+		t.Errorf("created %d runners, want 3", len(jit.names))
+	}
+}
+
+func TestScaleAcquireErrorStopsBeforeRecording(t *testing.T) {
+	s, jit := newScaler(t)
+	s.Session = &fakeSession{err: errors.New("boom")}
+	err := s.Scale(context.Background(), &scaleset.RunnerScaleSetMessage{
+		MessageID:            1,
+		Statistics:           &scaleset.RunnerScaleSetStatistic{TotalAssignedJobs: 1},
+		JobAvailableMessages: []*scaleset.JobAvailable{{JobMessageBase: scaleset.JobMessageBase{RunnerRequestID: 7}}},
+	})
+	if err == nil {
+		t.Fatal("want the acquire error, so the message is redelivered")
+	}
+	if len(jit.names) != 0 {
+		t.Errorf("created %d runners before the message was handled", len(jit.names))
+	}
+	if out := scrapeScaler(t, s); !strings.Contains(out, `kubevirt_scaleset_errors_total{name="homelab-runners-vm",operation="acquire_jobs"} 1`) {
+		t.Errorf("acquire error not counted:\n%s", out)
 	}
 }

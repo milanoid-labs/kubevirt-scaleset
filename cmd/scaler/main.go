@@ -65,7 +65,7 @@ func run(log *slog.Logger) error {
 
 	log.Info("scale set ready", "id", scaleSet.ID)
 
-	// Metrics first: the listener records into it from its first message.
+	// Metrics first: the scaler records into it from the listener's first message.
 	rec := metrics.New(cfg.ScaleSetName, cfg.MinRunners, cfg.MaxRunners)
 	if err := serveMetrics(ctx, cfg.MetricsAddr, rec, log); err != nil {
 		return fmt.Errorf("metrics server: %w", err)
@@ -90,7 +90,7 @@ func run(log *slog.Logger) error {
 		ScaleSetID: scaleSet.ID,
 		MaxRunners: cfg.MaxRunners,
 		Logger:     log.WithGroup("listener"),
-	}, listener.WithMetricsRecorder(rec))
+	})
 	if err != nil {
 		return fmt.Errorf("listener: %w", err)
 	}
@@ -98,6 +98,7 @@ func run(log *slog.Logger) error {
 	s := &scaler.Scaler{
 		Kube:       kube,
 		GitHub:     gh,
+		Session:    session,
 		ScaleSetID: scaleSet.ID,
 		VM: vm.Spec{
 			Namespace: cfg.Namespace,

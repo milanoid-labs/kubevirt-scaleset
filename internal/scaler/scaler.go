@@ -1,5 +1,6 @@
 // Package scaler turns GitHub's job count into runner VMs. It implements the
-// actions/scaleset listener's Scaler interface.
+// actions/scaleset listener's Scaler interface: the listener only polls and acks, the
+// scaler acquires jobs, records metrics and creates VMs.
 package scaler
 
 import (
@@ -29,9 +30,15 @@ type Runners interface {
 	RemoveRunner(ctx context.Context, runnerID int64) error
 }
 
+// Jobs is the part of the message session client the scaler needs (a fake in tests).
+type Jobs interface {
+	AcquireJobs(ctx context.Context, requestIDs []int64) ([]int64, error)
+}
+
 type Scaler struct {
 	Kube       client.Client
 	GitHub     Runners
+	Session    Jobs
 	ScaleSetID int
 	VM         vm.Spec
 	MinRunners int
@@ -41,9 +48,61 @@ type Scaler struct {
 	IdleTimeout time.Duration
 	Metrics     *metrics.Recorder
 	Log         *slog.Logger
+
+	// stats are the last statistics seen: an empty poll (nil message) carries none, and
+	// the listener doesn't keep them. Scale is never called concurrently.
+	stats *scaleset.RunnerScaleSetStatistic
 }
 
 var _ listener.Scaler = (*Scaler)(nil)
+
+// Scale handles one poll: the initial session statistics, a message, or nil after an
+// idle long poll. Jobs are acquired first, so they are assigned as early as possible;
+// an error there is the only one returned, and it comes before anything is recorded, so
+// the redelivered message doesn't count jobs twice. Acquiring a job again is a no-op.
+func (s *Scaler) Scale(ctx context.Context, msg *scaleset.RunnerScaleSetMessage) error {
+	if msg != nil {
+		if err := s.acquire(ctx, msg.JobAvailableMessages); err != nil {
+			return err
+		}
+		if msg.Statistics != nil {
+			s.stats = msg.Statistics
+			s.Metrics.RecordStatistics(msg.Statistics)
+		}
+		for _, job := range msg.JobStartedMessages {
+			s.Metrics.RecordJobStarted(job)
+			s.HandleJobStarted(ctx, job)
+		}
+		for _, job := range msg.JobCompletedMessages {
+			s.Metrics.RecordJobCompleted(job)
+			s.HandleJobCompleted(ctx, job)
+		}
+	}
+	if s.stats == nil {
+		return nil
+	}
+	desired, _ := s.HandleDesiredRunnerCount(ctx, s.stats.TotalAssignedJobs)
+	s.Metrics.RecordDesiredRunners(desired)
+	return nil
+}
+
+// acquire takes all available jobs: the scale set's runners are interchangeable.
+func (s *Scaler) acquire(ctx context.Context, jobs []*scaleset.JobAvailable) error {
+	if len(jobs) == 0 {
+		return nil
+	}
+	ids := make([]int64, 0, len(jobs))
+	for _, j := range jobs {
+		ids = append(ids, j.RunnerRequestID)
+	}
+	acquired, err := s.Session.AcquireJobs(ctx, ids)
+	if err != nil {
+		s.Metrics.Error("acquire_jobs")
+		return fmt.Errorf("acquiring jobs: %w", err)
+	}
+	s.Log.Info("acquired jobs", "available", len(ids), "acquired", len(acquired))
+	return nil
+}
 
 // HandleDesiredRunnerCount makes sure min(MaxRunners, MinRunners+assigned) VMs exist.
 //

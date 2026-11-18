@@ -9,7 +9,7 @@ on:
         description: Runner label
         default: homelab-runners-vm-test
         type: choice
-        options: [homelab-runners-vm-test, homelab-runners-vm]
+        options: [homelab-runners-vm]
 
 permissions:
   contents: read
